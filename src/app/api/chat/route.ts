@@ -157,7 +157,14 @@ You reference emotional patterns only when relevant.
 
 export async function POST(req: Request) {
   try {
-    const { messages, userProfile, memories } = await req.json();
+    const {
+      messages,
+      userProfile,
+      memories,
+      personalityMode,
+      innerState,
+      emotionScore,
+    } = await req.json();
 
     const apiKey = process.env.OPENAI_API_KEY;
     const memoryContext =
@@ -169,6 +176,22 @@ export async function POST(req: Request) {
     .join("\n")}
   `
       : "No long term memories yet.";
+      const personalityContext = `
+Current INNER state: ${innerState || "present"}
+Personality mode: ${personalityMode || "balanced_presence"}
+
+Emotion score:
+Stress: ${emotionScore?.stress ?? 50}
+Clarity: ${emotionScore?.clarity ?? 50}
+Energy: ${emotionScore?.energy ?? 50}
+
+Personality behavior:
+- direct_protective: be more direct, protective, firm, concise.
+- minimal_grounding: use fewer words, grounded tone, no over-explaining.
+- deep_reflective: go deeper, psychologically precise, thoughtful.
+- soft_clarity: calm, clear, warm but not sweet.
+- balanced_presence: natural, intelligent, emotionally aware.
+`;
     if (!apiKey) {
       return NextResponse.json(
         { error: "Missing OPENAI_API_KEY" },
@@ -196,7 +219,8 @@ ${userProfile.join("\n")}
         body: JSON.stringify({
           model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
           temperature: 1.05,
-          stream: true,
+          response_format: { type: "json_object" },
+          stream: false,
           messages: [
             {
               role: "system",
@@ -204,7 +228,24 @@ ${userProfile.join("\n")}
 ${INNER_SYSTEM_PROMPT}
 
 ${profileContext}
+
 ${memoryContext}
+
+${personalityContext}
+Return JSON only.
+
+Format:
+{
+  "reply": "assistant response",
+  "consciousness": {
+    "innerThought": "...",
+    "state": "calm | reflective | intense | silent | present",
+    "stress": 0,
+    "clarity": 0,
+    "energy": 0,
+    "thoughts": ["...", "..."]
+  }
+}
 `,
             },
 
@@ -213,67 +254,18 @@ ${memoryContext}
         }),
       }
     );
+    const data = await response.json();
+    const raw = data.choices?.[0]?.message?.content || "{}";
 
-    const encoder = new TextEncoder();
+const parsed = JSON.parse(raw);
 
-    const stream = new ReadableStream({
-      async start(controller) {
-        const reader = response.body?.getReader();
+return NextResponse.json({
+  response: parsed.reply || "",
+  consciousness: parsed.consciousness || {},
+});    
+
     
-        if (!reader) {
-          controller.close();
-          return;
-        }
-    
-        const decoder = new TextDecoder();
-        let buffer = "";
-        
-        while (true) {
-          const { done, value } = await reader.read();
-        
-          if (done) break;
-        
-          buffer += decoder.decode(value, { stream: true });
-        
-          const lines = buffer.split("\n");
-        
-          buffer = lines.pop() ?? "";
-        
-          for (const line of lines) {
-            const cleanLine = line.trim();
-        
-            if (!cleanLine.startsWith("data: ")) continue;
-        
-            const data = cleanLine.replace("data: ", "");
-        
-            if (data === "[DONE]") {
-              controller.close();
-              return;
-            }
-        
-            try {
-              const json = JSON.parse(data);
-        
-              const token = json.choices?.[0]?.delta?.content ?? "";
-        
-              if (token) {
-                controller.enqueue(encoder.encode(token));
-              }
-            } catch {
-              // Wait for the next chunk if JSON is incomplete
-            }
-          }
-        }
-    
-        controller.close();
-      },
-    });
-    
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-      },
-    });  
+   
   } catch (error) {
     return NextResponse.json(
       {

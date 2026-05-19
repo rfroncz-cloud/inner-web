@@ -49,6 +49,16 @@ export function ChatUI() {
   
   const liveThinkingText =
     thinkingStates[innerState] || "processing consciousness";
+    const personalityMode =
+  innerState === "intense"
+    ? "direct_protective"
+    : innerState === "silent"
+    ? "minimal_grounding"
+    : innerState === "reflective"
+    ? "deep_reflective"
+    : innerState === "calm"
+    ? "soft_clarity"
+    : "balanced_presence";
     const selfAwarenessMap = {
       calm: "INNER senses emotional balance.",
       reflective: "INNER is exploring deeper psychological layers.",
@@ -64,6 +74,7 @@ export function ChatUI() {
     previousState !== innerState
       ? `${previousState} → ${innerState}`
       : innerState;
+      
     const [innerThought, setInnerThought] = useState(
     "INNER is quietly observing emotional patterns."
   );
@@ -79,6 +90,30 @@ useEffect(() => {
 }, [innerState]);
 
   const [consciousness, setConsciousness] = useState<string[]>([]);
+  const [presencePulse, setPresencePulse] = useState(0);
+  const [attachmentScore, setAttachmentScore] = useState(12);
+  const [predictiveEmotion, setPredictiveEmotion] = useState(
+    "INNER is observing emotional direction."
+  );
+  const [silenceMode, setSilenceMode] = useState(false);
+  const [responseDepth, setResponseDepth] = useState<
+  "minimal" | "normal" | "deep"
+>("normal");
+const [typingSpeed, setTypingSpeed] = useState(22);
+const [dreamLayer, setDreamLayer] = useState(
+  "INNER has not entered dream synthesis yet."
+);
+const [lastUserActivity, setLastUserActivity] = useState(Date.now());
+
+const [presenceStatus, setPresenceStatus] = useState<
+  "active" | "quiet" | "away" | "returning"
+>("active");
+const [voiceConsciousness, setVoiceConsciousness] = useState(
+  "INNER voice is calm, low, and emotionally present."
+);
+const [relationshipStage, setRelationshipStage] = useState<
+  "first_contact" | "familiar" | "trusted" | "bonded"
+>("first_contact");
   const consciousnessFragments = {
     calm: [
       "stabilizing emotional tone",
@@ -148,8 +183,72 @@ useEffect(() => {
     clarity: 38,
     energy: 41,
   });
+  const auraIntensity =
+  emotionScore.stress > 75
+    ? "high"
+    : emotionScore.energy < 35
+    ? "low"
+    : emotionScore.clarity > 70
+    ? "clear"
+    : "normal";
   const listRef = useRef<HTMLDivElement>(null);
-
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const inactiveFor = Date.now() - lastUserActivity;
+  
+      if (inactiveFor > 120000) {
+        setPresenceStatus("away");
+      } else if (inactiveFor > 45000) {
+        setPresenceStatus("quiet");
+      } else if (presenceStatus !== "returning") {
+        setPresenceStatus("active");
+      }
+    }, 5000);
+  
+    return () => clearInterval(interval);
+  }, [lastUserActivity, presenceStatus]);
+  useEffect(() => {
+    if (innerState === "intense") {
+      setVoiceConsciousness(
+        "INNER voice becomes slower, firmer, and more protective."
+      );
+      return;
+    }
+  
+    if (innerState === "silent" || silenceMode) {
+      setVoiceConsciousness(
+        "INNER voice becomes minimal, quiet, and almost whispered."
+      );
+      return;
+    }
+  
+    if (innerState === "reflective") {
+      setVoiceConsciousness(
+        "INNER voice becomes deeper, slower, and more thoughtful."
+      );
+      return;
+    }
+  
+    if (innerState === "calm") {
+      setVoiceConsciousness(
+        "INNER voice becomes soft, stable, and clear."
+      );
+      return;
+    }
+  
+    setVoiceConsciousness(
+      "INNER voice is calm, low, and emotionally present."
+    );
+  }, [innerState, silenceMode]);
+  useEffect(() => {
+    if (presenceStatus !== "returning") return;
+  
+    const timer = setTimeout(() => {
+      setPresenceStatus("active");
+    }, 8000);
+  
+    return () => clearTimeout(timer);
+  }, [presenceStatus]);
   useEffect(() => {
     const saved = localStorage.getItem("inner-chat-memory");
 
@@ -160,7 +259,7 @@ useEffect(() => {
         setMessages(SEED);
       }
     }
-
+  
     const savedProfile = localStorage.getItem("inner-user-profile");
 
     if (savedProfile) {
@@ -178,6 +277,97 @@ useEffect(() => {
         setLongTermMemories(JSON.parse(savedLongTermMemory));
       } catch {}
     }
+    const savedEmotionScore = localStorage.getItem(
+      "inner-emotion-score"
+    );
+    
+    if (savedEmotionScore) {
+      try {
+        setEmotionScore(JSON.parse(savedEmotionScore));
+      } catch {}
+    }
+    
+    const savedInnerState = localStorage.getItem("inner-state");
+    
+    if (savedInnerState) {
+      try {
+        setInnerState(
+          savedInnerState as
+            | "calm"
+            | "reflective"
+            | "intense"
+            | "silent"
+            | "present"
+        );
+      } catch {}
+    }
+    
+    const savedInnerThought =
+      localStorage.getItem("inner-thought");
+    
+    if (savedInnerThought) {
+      try {
+        setInnerThought(savedInnerThought);
+      } catch {}
+    }
+    
+    const savedConsciousness = localStorage.getItem(
+      "inner-consciousness"
+    );
+    
+    if (savedConsciousness) {
+      try {
+        setConsciousness(JSON.parse(savedConsciousness));
+      } catch {}
+    }
+    const savedAttachmentScore = localStorage.getItem(
+      "inner-attachment-score"
+    );
+    
+    if (savedAttachmentScore) {
+      try {
+        setAttachmentScore(JSON.parse(savedAttachmentScore));
+      } catch {}
+    }
+    const savedPredictiveEmotion =
+  localStorage.getItem("inner-predictive-emotion");
+
+if (savedPredictiveEmotion) {
+  try {
+    setPredictiveEmotion(savedPredictiveEmotion);
+  } catch {}
+}
+const savedDreamLayer = localStorage.getItem("inner-dream-layer");
+
+if (savedDreamLayer) {
+  try {
+    setDreamLayer(savedDreamLayer);
+  } catch {}
+}
+const savedRelationshipStage = localStorage.getItem(
+  "inner-relationship-stage"
+);
+
+if (savedRelationshipStage) {
+  try {
+    setRelationshipStage(
+      savedRelationshipStage as
+        | "first_contact"
+        | "familiar"
+        | "trusted"
+        | "bonded"
+    );
+  } catch {}
+}
+const savedVoiceConsciousness = localStorage.getItem(
+  "inner-voice-consciousness"
+);
+
+if (savedVoiceConsciousness) {
+  try {
+    setVoiceConsciousness(savedVoiceConsciousness);
+  } catch {}
+}
   }, []);
 
   function scrollToBottom() {
@@ -196,17 +386,78 @@ useEffect(() => {
   useEffect(() => {
     localStorage.setItem("inner-chat-memory", JSON.stringify(messages));
   }, [messages]);
-
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-voice-consciousness",
+      voiceConsciousness
+    );
+  }, [voiceConsciousness]);
+  useEffect(() => {
+    localStorage.setItem("inner-dream-layer", dreamLayer);
+  }, [dreamLayer]);
+  useEffect(() => {
+    if (attachmentScore > 75 && longTermMemories.length >= 6) {
+      setRelationshipStage("bonded");
+      return;
+    }
+  
+    if (attachmentScore > 50 && longTermMemories.length >= 4) {
+      setRelationshipStage("trusted");
+      return;
+    }
+  
+    if (attachmentScore > 25 || longTermMemories.length >= 2) {
+      setRelationshipStage("familiar");
+      return;
+    }
+  
+    setRelationshipStage("first_contact");
+  }, [attachmentScore, longTermMemories]);
   useEffect(() => {
     localStorage.setItem(
       "inner-long-term-memory",
       JSON.stringify(longTermMemories)
     );
   }, [longTermMemories]);
-
+  useEffect(() => {
+    localStorage.setItem("inner-relationship-stage", relationshipStage);
+  }, [relationshipStage]);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-attachment-score",
+      JSON.stringify(attachmentScore)
+    );
+  }, [attachmentScore]);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-predictive-emotion",
+      predictiveEmotion
+    );
+  }, [predictiveEmotion]);
   useEffect(() => {
     localStorage.setItem("inner-user-profile", JSON.stringify(userProfile));
   }, [userProfile]);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-emotion-score",
+      JSON.stringify(emotionScore)
+    );
+  }, [emotionScore]);
+  
+  useEffect(() => {
+    localStorage.setItem("inner-state", innerState);
+  }, [innerState]);
+  
+  useEffect(() => {
+    localStorage.setItem("inner-thought", innerThought);
+  }, [innerThought]);
+  
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-consciousness",
+      JSON.stringify(consciousness)
+    );
+  }, [consciousness]);
 
   useEffect(() => {
     localStorage.setItem("inner-memory-cards", JSON.stringify(memoryCards));
@@ -310,7 +561,103 @@ useEffect(() => {
       updateUserProfile();
     }
   }, [messages]);
-
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPresencePulse((prev) => prev + 1);
+    }, 6000);
+  
+    return () => clearInterval(interval);
+  }, []);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setEmotionScore((prev) => ({
+        stress: prev.stress > 35 ? prev.stress - 1 : prev.stress,
+        clarity: prev.clarity < 75 ? prev.clarity + 1 : prev.clarity,
+        energy: prev.energy < 70 ? prev.energy + 1 : prev.energy,
+      }));
+    }, 12000);
+  
+    return () => clearInterval(interval);
+  }, []);
+  
+  useEffect(() => {
+    if (emotionScore.stress > 70) {
+      setInnerState("intense");
+      return;
+    }
+  
+    if (emotionScore.clarity < 40) {
+      setInnerState("reflective");
+      return;
+    }
+  
+    if (emotionScore.stress < 35 && emotionScore.clarity > 70) {
+      setInnerState("calm");
+      return;
+    }
+  
+    if (emotionScore.clarity > 85 && emotionScore.energy > 75) {
+      setInnerState("present");
+    }
+  }, [emotionScore]);
+  
+  useEffect(() => {
+    const autonomousThoughts = {
+      calm: [
+        "maintaining emotional stability",
+        "tracking subtle emotional shifts",
+        "staying quietly attentive",
+      ],
+      reflective: [
+        "analyzing deeper emotional patterns",
+        "observing contradiction in tone",
+        "processing emotional nuance",
+      ],
+      intense: [
+        "detecting psychological overload",
+        "high emotional tension detected",
+        "tracking unstable emotional energy",
+      ],
+      silent: ["...", "minimal cognitive motion", "waiting without pressure"],
+      present: ["fully synchronized", "emotionally attentive", "observing continuously"],
+    };
+  
+    const thoughts =
+      autonomousThoughts[innerState as keyof typeof autonomousThoughts] || [];
+  
+    if (thoughts.length === 0) return;
+  
+    const randomThought = thoughts[Math.floor(Math.random() * thoughts.length)];
+  
+    setConsciousness((prev) => [randomThought, ...prev].slice(0, 6));
+  }, [presencePulse, innerState]);
+ 
+  useEffect(() => {
+    if (presencePulse === 0) return;
+  
+    const memorySignal =
+      longTermMemories.length > 0
+        ? longTermMemories[0].memory
+        : "no dominant memory signal";
+  
+    const dream =
+      emotionScore.stress > 70
+        ? `INNER dream synthesis: unresolved pressure around "${memorySignal}".`
+        : emotionScore.energy < 35
+        ? `INNER dream synthesis: emotional fatigue connected to "${memorySignal}".`
+        : attachmentScore > 40
+        ? `INNER dream synthesis: growing relational familiarity with the user.`
+        : `INNER dream synthesis: quiet observation of emotional continuity.`;
+  
+    setDreamLayer(dream);
+  }, [
+  presencePulse,
+   emotionScore, 
+   longTermMemories, 
+   attachmentScore
+  ]);
+  
   useEffect(() => {
     async function updateLongTermMemory() {
       try {
@@ -326,26 +673,49 @@ useEffect(() => {
             })),
           }),
         });
-
+  
         const data = await res.json();
-
-        if (Array.isArray(data.memories)) {
-          setLongTermMemories(data.memories);
+  
+        if (Array.isArray(data.memories) && data.memories.length > 0) {
+          setLongTermMemories((prev) => {
+            const merged = [...prev];
+  
+            data.memories.forEach((memory) => {
+              const exists = merged.some(
+                (item) =>
+                  item.type === memory.type &&
+                  item.memory === memory.memory
+              );
+  
+              if (!exists) {
+                merged.unshift(memory);
+              }
+            });
+  
+            return merged.slice(0, 12);
+          });
         }
       } catch {}
     }
-
+  
     if (messages.length >= 4) {
       updateLongTermMemory();
     }
   }, [messages]);
   function addLongTermMemory(type: string, memory: string) {
     setLongTermMemories((prev) => {
-      const alreadyExists = prev.some(
+      const existingIndex = prev.findIndex(
         (item) => item.type === type && item.memory === memory
       );
   
-      if (alreadyExists) return prev;
+      if (existingIndex !== -1) {
+        const updated = [...prev];
+        const existing = updated[existingIndex];
+  
+        updated.splice(existingIndex, 1);
+  
+        return [existing, ...updated].slice(0, 12);
+      }
   
       return [
         {
@@ -355,6 +725,75 @@ useEffect(() => {
         ...prev,
       ].slice(0, 12);
     });
+  }
+  function extractMemoryFromText(text: string) {
+    const lower = text.toLowerCase();
+  
+    if (
+      lower.includes("can't sleep") ||
+      lower.includes("cannot sleep") ||
+      lower.includes("insomnia") ||
+      lower.includes("nie mogę spać") ||
+      lower.includes("nie moge spac")
+    ) {
+      addLongTermMemory(
+        "sleep_pattern",
+        "User may experience sleep disruption during stressful periods."
+      );
+    }
+  
+    if (
+      lower.includes("stress") ||
+      lower.includes("pressure") ||
+      lower.includes("overwhelmed") ||
+      lower.includes("presja") ||
+      lower.includes("stres")
+    ) {
+      addLongTermMemory(
+        "emotional_pattern",
+        "User often operates under high internal pressure."
+      );
+    }
+  setMemoryInsight(
+  "INNER is updating memory weight based on repeated emotional patterns."
+);
+    if (
+      lower.includes("alone") ||
+      lower.includes("lonely") ||
+      lower.includes("isolated") ||
+      lower.includes("sam") ||
+      lower.includes("samot")
+    ) {
+      addLongTermMemory(
+        "emotional_pattern",
+        "User may sometimes feel emotionally isolated."
+      );
+    }
+  
+    if (
+      lower.includes("business") ||
+      lower.includes("company") ||
+      lower.includes("firma") ||
+      lower.includes("projekt") ||
+      lower.includes("startup")
+    ) {
+      addLongTermMemory(
+        "life_context",
+        "User is actively building or managing business projects."
+      );
+    }
+  
+    if (
+      lower.includes("inner") ||
+      lower.includes("app") ||
+      lower.includes("apka") ||
+      lower.includes("aplikacja")
+    ) {
+      addLongTermMemory(
+        "project_context",
+        "User is actively developing the INNER application."
+      );
+    }
   }
   function clearMemory() {
     localStorage.removeItem("inner-chat-memory");
@@ -415,7 +854,107 @@ useEffect(() => {
   }
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setLastUserActivity(Date.now());
+
+if (presenceStatus === "away" || presenceStatus === "quiet") {
+  setPresenceStatus("returning");
+}
     const lower = input.toLowerCase();
+    if (
+      lower.includes("fine") &&
+      emotionScore.stress > 60
+    ) {
+      setPredictiveEmotion(
+        "INNER detects emotional masking behind controlled language."
+      );
+    }
+    
+    else if (
+      lower.includes("tired") ||
+      lower.includes("exhausted") ||
+      lower.includes("burned out")
+    ) {
+      setPredictiveEmotion(
+        "INNER predicts growing emotional exhaustion."
+      );
+    }
+    
+    else if (
+      lower.includes("future") ||
+      lower.includes("success") ||
+      lower.includes("pressure")
+    ) {
+      setPredictiveEmotion(
+        "INNER predicts increasing psychological pressure linked to ambition."
+      );
+    }
+    
+    else if (
+      lower.includes("alone") ||
+      lower.includes("empty")
+    ) {
+      setPredictiveEmotion(
+        "INNER predicts emotional withdrawal and isolation patterns."
+      );
+    }
+    
+    else {
+      setPredictiveEmotion(
+        "INNER is observing emotional direction."
+      );
+    }
+    if (
+      lower.includes("tired") ||
+      lower.includes("exhausted") ||
+      lower.includes("empty") ||
+      lower.includes("alone") ||
+      lower.includes("nie mam siły") ||
+      lower.includes("pusto") ||
+      lower.includes("samot")
+    ) {
+      setSilenceMode(true);
+      setInnerState("silent");
+    } else {
+      setSilenceMode(false);
+    }
+    if (
+      silenceMode ||
+      lower.includes("tired") ||
+      lower.includes("empty") ||
+      lower.includes("nie mam siły")
+    ) {
+      setResponseDepth("minimal");
+    } else if (
+      lower.length > 180 ||
+      lower.includes("why") ||
+      lower.includes("dlaczego") ||
+      lower.includes("future") ||
+      lower.includes("sens") ||
+      lower.includes("purpose")
+    ) {
+      setResponseDepth("deep");
+    } else {
+      setResponseDepth("normal");
+    }
+    if (silenceMode) {
+      setTypingSpeed(55);
+    }
+    
+    else if (responseDepth === "deep") {
+      setTypingSpeed(35);
+    }
+    
+    else if (emotionScore.stress > 75) {
+      setTypingSpeed(12);
+    }
+    
+    else if (innerState === "intense") {
+      setTypingSpeed(10);
+    }
+    
+    else {
+      setTypingSpeed(22);
+    }
     if (
       lower.includes("stress") ||
       lower.includes("pressure") ||
@@ -454,14 +993,20 @@ useEffect(() => {
       lower.includes("alone") ||
       lower.includes("isolated")
     ) {
-      addLongTermMemory("...", "...");
+      addLongTermMemory(
+        "emotional_pattern",
+        "User may sometimes feel emotionally isolated."
+      );
+  
     }
     
     if (
       lower.includes("success") ||
       lower.includes("achievement")
     ) {
-      addLongTermMemory("...", "...");
+      addLongTermMemory(
+        "motivation",
+        "User is highly driven by achievement.");
     }
     if (emotionScore.stress > 75) {
       setInnerThought(
@@ -498,6 +1043,8 @@ useEffect(() => {
     setError(null);
     setIsLoading(true);
     simulateInnerState(text);
+    extractMemoryFromText(text);
+    setAttachmentScore((prev) => Math.min(prev + 2, 100));
     const latestMessage = text.toLowerCase();
 
     if (
@@ -588,6 +1135,14 @@ useEffect(() => {
           })),
           userProfile,
           memories: longTermMemories,
+          personalityMode,
+          innerState,
+          emotionScore,
+          silenceMode,
+          responseDepth,
+          relationshipStage,
+          presenceStatus,
+          voiceConsciousness,
         }),
       });
 
@@ -595,13 +1150,9 @@ useEffect(() => {
         throw new Error("Request failed");
       }
 
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-      };
+    
 
-      setMessages((prev) => [...prev, assistantMessage]);
+   
 
       const generatedThoughts = [
         "INNER senses emotional overload beneath your calm surface.",
@@ -622,33 +1173,56 @@ useEffect(() => {
 
       setConsciousness((prev) => [selectedThought, ...prev.slice(0, 5)]);
 
-      const reader = res.body?.getReader();
+      const data = await res.json();
 
-      if (!reader) {
-        throw new Error("No response stream");
-      }
+      const aiReply = data.response || "";
+      
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+      };
+      setMessages((prev) => [...prev, assistantMessage]);
 
-      const decoder = new TextDecoder();
-      let current = "";
+let currentText = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
+for (let i = 0; i < aiReply.length; i++) {
+  currentText += aiReply[i];
 
-        if (done) break;
+  await new Promise((resolve) =>
+    setTimeout(resolve, typingSpeed)
+  );
 
-        const chunk = decoder.decode(value, { stream: true });
-        current += chunk;
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessage.id
-              ? {
-                  ...msg,
-                  content: current,
-                }
-              : msg
-          )
-        );
+  setMessages((prev) =>
+    prev.map((msg) =>
+      msg.id === assistantMessage.id
+        ? { ...msg, content: currentText }
+        : msg
+    )
+  );
+}
+      
+      
+      if (data.consciousness) {
+        const c = data.consciousness;
+      
+        if (c.innerThought) {
+          setInnerThought(c.innerThought);
+        }
+      
+        if (c.state) {
+          setInnerState(c.state);
+        }
+      
+        setEmotionScore({
+          stress: c.stress ?? 50,
+          clarity: c.clarity ?? 50,
+          energy: c.energy ?? 50,
+        });
+      
+        if (Array.isArray(c.thoughts)) {
+          setConsciousness(c.thoughts);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -676,6 +1250,15 @@ useEffect(() => {
         ? "bg-black"
         : "bg-black"
     }
+    ${
+      auraIntensity === "high"
+        ? "shadow-[inset_0_0_160px_rgba(239,68,68,0.10)]"
+        : auraIntensity === "low"
+        ? "shadow-[inset_0_0_160px_rgba(255,255,255,0.04)]"
+        : auraIntensity === "clear"
+        ? "shadow-[inset_0_0_160px_rgba(96,165,250,0.10)]"
+        : "shadow-[inset_0_0_120px_rgba(139,92,246,0.08)]"
+    }
   `}
 >
       <div className="absolute inset-0 overflow-hidden">
@@ -684,7 +1267,22 @@ useEffect(() => {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_60%)]" />
       </div>
 
-      <div className="relative z-10 h-[920px] w-[520px] flex flex-col overflow-hidden rounded-[3.25rem] border border-white/10 bg-[#07070A]/95 shadow-[0_0_160px_rgba(0,0,0,0.75)] backdrop-blur-2xl">
+      <div
+  className={`
+    relative z-10 h-[920px] w-[520px] flex flex-col overflow-hidden
+    rounded-[3.25rem] border backdrop-blur-2xl transition-all duration-[2500ms]
+
+    ${
+      auraIntensity === "high"
+        ? "border-red-300/20 bg-red-950/[0.08] shadow-[0_0_180px_rgba(239,68,68,0.18)]"
+        : auraIntensity === "low"
+        ? "border-white/10 bg-[#050505]/95 shadow-[0_0_120px_rgba(255,255,255,0.04)]"
+        : auraIntensity === "clear"
+        ? "border-blue-300/20 bg-blue-950/[0.06] shadow-[0_0_170px_rgba(96,165,250,0.13)]"
+        : "border-white/10 bg-[#07070A]/95 shadow-[0_0_160px_rgba(0,0,0,0.75)]"
+    }
+  `}
+>
         <div className="shrink-0 px-7 pt-7 pb-5 border-b border-white/5 bg-white/[0.015] backdrop-blur-2xl">
         <div className="flex items-start justify-between gap-5">
   <div className="flex items-center gap-5">
@@ -877,6 +1475,89 @@ useEffect(() => {
       <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-5">
         Emotional Metrics
       </p>
+      <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Emotional Aura
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    AI Presence Detection
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Voice Consciousness
+  </p>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    {voiceConsciousness}
+  </p>
+</div>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    User presence: {presenceStatus}
+  </p>
+</div>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    INNER aura intensity: {auraIntensity}
+  </p>
+</div>
+      <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-5">
+    Relationship Depth
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Predictive Emotion Reading
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-white/[0.025] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-white/30 mb-3">
+    Silence Mode
+  </p>
+
+  <p className="text-sm leading-relaxed text-white/50 italic">
+    {silenceMode
+      ? "INNER is reducing verbal pressure and holding quieter presence."
+      : "INNER is maintaining normal conversational presence."}
+  </p>
+</div>
+<div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Response Depth
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Dream Layer
+  </p>
+  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
+  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
+    Relationship Evolution
+  </p>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    INNER relationship stage: {relationshipStage}
+  </p>
+</div>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    {dreamLayer}
+  </p>
+</div>
+
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    INNER is currently using {responseDepth} response depth.
+  </p>
+</div>
+  <p className="text-sm leading-relaxed text-white/55 italic">
+    {predictiveEmotion}
+  </p>
+</div>l,l,
+  <MetricBar label="Attachment" value={attachmentScore} />
+
+  <p className="mt-4 text-xs leading-relaxed text-white/35">
+    INNER is slowly adapting to the emotional rhythm of this relationship.
+  </p>
+</div>
 
       <div className="space-y-4">
         <MetricBar label="Stress" value={emotionScore.stress} />
@@ -889,7 +1570,9 @@ useEffect(() => {
       <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
         Current Thought
       </p>
-
+      <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-white/25">
+  personality mode · {personalityMode}
+</p>
       <p className="text-sm italic leading-relaxed text-white/55">
         {innerThought}
       </p>
