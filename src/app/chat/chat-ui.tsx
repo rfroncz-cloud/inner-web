@@ -1,7 +1,16 @@
 "use client";
 
+import { mergeMemoryLists } from "@/lib/memoryOptimizer";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import {
+  canSendMessage,
+  getMaxMemoryCount,
+  getMaxResponseDepth,
+  shouldShowUpgradeHint,
+  getPlanStatus,
+  getMaxInputLength,
+} from "@/lib/usageLimits";
 
 type Message = {
   id: string;
@@ -12,7 +21,57 @@ type Message = {
 type LongTermMemory = {
   type: string;
   memory: string;
+
+  importance: number;
+  emotionalWeight: number;
+
+  repeatCount: number;
+
+  createdAt: string;
+  lastAccessed?: string;
+
+  relationshipImpact?: number;
+  emotionalLayer?: "fear" | "sadness" | "pressure" | "hope" | "anger" | "love" | "identity" | "neutral";
+  emotionalTrigger?: string;
+  emotionalIntensity?: number;
+  category?:
+  | "core_fact"
+| "family"
+| "pet"
+| "birthday"
+| "age"
+| "location"
+| "relationship"
+| "work"
+    | "identity"
+    | "emotion"
+    | "goal"
+    | "relationship"
+    | "business"
+    | "health"
+    | "trauma"
+    | "dream"
+    | "belief"
+    | "habit"
+    | "project"
+    | "other";
 };
+
+type InnerUserProfile = {
+  communicationStyle: "short" | "balanced" | "expressive";
+  emotionalState: "stable" | "vulnerable" | "stressed" | "focused";
+  relationshipDepth: number;
+  mainTopics: string[];
+  dominantMood: "calm" | "low" | "intense" | "ambitious" | "unclear";
+};
+type InnerPersonalityStyle =
+  | "warm_friend"
+  | "direct_mentor"
+  | "quiet_support"
+  | "playful"
+  | "cold_truth"
+  | "spiritual_advisor"
+  | "business_advisor";
 
 const SEED: Message[] = [
   {
@@ -34,13 +93,22 @@ export function ChatUI() {
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingText, setThinkingText] = useState("INNER is thinking...");
   const [error, setError] = useState<string | null>(null);
-
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
   const [innerState, setInnerState] = useState<
-    "calm" | "reflective" | "intense" | "silent" | "present"
+    "calm" | "focused" | "reflective" | "intense" | "silent" | "present"
   >("present");
+  const [personalityStyle, setPersonalityStyle] =
+  useState<InnerPersonalityStyle>("warm_friend");
+  const [relationshipDepth, setRelationshipDepth] = useState(0);
+const [trustLevel, setTrustLevel] = useState(0);
+const [attachmentLevel, setAttachmentLevel] = useState(0);
   const [previousState, setPreviousState] = useState(innerState);
   const thinkingStates = {
     calm: "stabilizing emotional patterns",
+    focused: "sharpening strategic focus",
     reflective: "exploring deeper meaning",
     intense: "processing emotional pressure",
     silent: "quietly observing",
@@ -54,6 +122,8 @@ export function ChatUI() {
     ? "direct_protective"
     : innerState === "silent"
     ? "minimal_grounding"
+    : innerState === "focused"
+    ? "strategic_focus"
     : innerState === "reflective"
     ? "deep_reflective"
     : innerState === "calm"
@@ -61,6 +131,7 @@ export function ChatUI() {
     : "balanced_presence";
     const selfAwarenessMap = {
       calm: "INNER senses emotional balance.",
+      focused: "INNER is sharpening strategy and practical focus.",
       reflective: "INNER is exploring deeper psychological layers.",
       intense: "INNER detects elevated emotional tension.",
       silent: "INNER is intentionally reducing cognitive noise.",
@@ -78,6 +149,7 @@ export function ChatUI() {
     const [innerThought, setInnerThought] = useState(
     "INNER is quietly observing emotional patterns."
   );
+  const [lastUserMessage, setLastUserMessage] = useState<string | null>(null);
 useEffect(() => {
   if (innerState === "present") return;
 
@@ -99,12 +171,48 @@ useEffect(() => {
   const [responseDepth, setResponseDepth] = useState<
   "minimal" | "normal" | "deep"
 >("normal");
+const [thinkingMode, setThinkingMode] = useState<
+  | "casual"
+  | "reflective"
+  | "analytical"
+  | "strategic"
+  | "emotional"
+>("casual");
 const [typingSpeed, setTypingSpeed] = useState(22);
 const [dreamLayer, setDreamLayer] = useState(
   "INNER has not entered dream synthesis yet."
 );
 const [lastUserActivity, setLastUserActivity] = useState(Date.now());
+const [dailyMessages, setDailyMessages] = useState(() => {
+  if (typeof window === "undefined") return 0;
 
+  const saved = localStorage.getItem("inner_daily_messages");
+
+  return saved ? Number(saved) : 0;
+});
+useEffect(() => {
+  localStorage.setItem(
+    "inner_daily_messages",
+    String(dailyMessages)
+  );
+}, [dailyMessages]);
+
+useEffect(() => {
+  const today = new Date().toDateString();
+  const savedDate = localStorage.getItem("inner_usage_date");
+
+  if (savedDate !== today) {
+    localStorage.setItem("inner_usage_date", today);
+    localStorage.setItem("inner_daily_messages", "0");
+    setDailyMessages(0);
+  }
+}, []);
+
+const userPlan = "premium";
+const planStatus = getPlanStatus({
+  plan: userPlan,
+  dailyMessages,
+});
 const [presenceStatus, setPresenceStatus] = useState<
   "active" | "quiet" | "away" | "returning"
 >("active");
@@ -119,6 +227,12 @@ const [relationshipStage, setRelationshipStage] = useState<
       "stabilizing emotional tone",
       "observing quietly",
       "reducing emotional noise",
+    ],
+
+    focused: [
+      "prioritizing clarity",
+      "mapping practical next steps",
+      "reducing strategic noise",
     ],
   
     reflective: [
@@ -175,8 +289,147 @@ const [relationshipStage, setRelationshipStage] = useState<
   ]);
 
   const [userProfile, setUserProfile] = useState<string[]>([]);
+  const [innerUserProfile, setInnerUserProfile] = useState<InnerUserProfile>(() => {
+    if (typeof window === "undefined") {
+      return {
+        communicationStyle: "balanced",
+        emotionalState: "stable",
+        relationshipDepth: 0,
+        mainTopics: [],
+        dominantMood: "unclear",
+      };
+    }
+  
+    const saved = localStorage.getItem("inner-user-profile-light");
+  
+    return saved
+      ? JSON.parse(saved)
+      : {
+          communicationStyle: "balanced",
+          emotionalState: "stable",
+          relationshipDepth: 0,
+          mainTopics: [],
+          dominantMood: "unclear",
+        };
+  });
 
-  const [longTermMemories, setLongTermMemories] = useState<LongTermMemory[]>([]);
+  const [longTermMemories, setLongTermMemories] =
+  useState<LongTermMemory[]>(() => {
+    if (typeof window === "undefined") return [];
+    
+    const saved = localStorage.getItem(
+      "inner_long_term_memories"
+    );
+
+    return saved ? JSON.parse(saved) : [];
+    
+  });
+  useEffect(() => {
+    const savedRelationshipDepth =
+      localStorage.getItem("inner_relationship_depth");
+  
+    if (savedRelationshipDepth) {
+      setRelationshipDepth(JSON.parse(savedRelationshipDepth));
+    }
+  
+    const savedTrust =
+      localStorage.getItem("inner_trust_level");
+  
+    if (savedTrust) {
+      setTrustLevel(JSON.parse(savedTrust));
+    }
+  
+    const savedAttachment =
+      localStorage.getItem("inner_attachment_level");
+  
+    if (savedAttachment) {
+      setAttachmentLevel(JSON.parse(savedAttachment));
+    }
+  }, []);
+
+  useEffect(() => {
+    async function loadPersistentMemories() {
+      try {
+        const res = await fetch("/api/memory/load");
+        const data = await res.json();
+  
+        if (Array.isArray(data.memories)) {
+          setLongTermMemories((prev) => {
+            const merged = [...data.memories, ...prev];
+  
+            const unique = Array.from(
+              new Map(
+                merged.map((memory) => [
+                  `${memory.type}-${memory.memory}`,
+                  memory,
+                ])
+              ).values()
+            );
+  
+            return unique.slice(0, 50);
+          });
+        }
+      } catch (error) {
+        console.error("Failed to load persistent memories:", error);
+      }
+    }
+  
+    loadPersistentMemories();
+  }, []);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner_long_term_memories",
+      JSON.stringify(longTermMemories)
+    );
+  }, [longTermMemories]);
+  
+  useEffect(() => {
+    if (!longTermMemories.length) return;
+  
+    const timeout = setTimeout(async () => {
+      try {
+        await fetch("/api/memory/sync", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            memories: longTermMemories.slice(0, 50).map((memory) => ({
+              ...memory,
+              memory: compressMemoryText(memory.memory),
+            })),
+          }),
+        });
+      } catch (error) {
+        console.error("Memory sync failed:", error);
+      }
+    }, 1200);
+  
+    return () => clearTimeout(timeout);
+  }, [longTermMemories]);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner_relationship_depth",
+      JSON.stringify(relationshipDepth)
+    );
+  
+    localStorage.setItem(
+      "inner_trust_level",
+      JSON.stringify(trustLevel)
+    );
+  
+    localStorage.setItem(
+      "inner_attachment_level",
+      JSON.stringify(attachmentLevel)
+    );
+  }, [relationshipDepth, trustLevel, attachmentLevel]);
+  const [topMemories, setTopMemories] = useState<LongTermMemory[]>([]);
+  useEffect(() => {
+    localStorage.setItem(
+      "inner-user-profile-light",
+      JSON.stringify(innerUserProfile)
+    );
+  }, [innerUserProfile]);
 
   const [emotionScore, setEmotionScore] = useState({
     stress: 72,
@@ -218,6 +471,13 @@ const [relationshipStage, setRelationshipStage] = useState<
     if (innerState === "silent" || silenceMode) {
       setVoiceConsciousness(
         "INNER voice becomes minimal, quiet, and almost whispered."
+      );
+      return;
+    }
+  
+    if (innerState === "focused") {
+      setVoiceConsciousness(
+        "INNER voice becomes clearer, sharper, and more strategic."
       );
       return;
     }
@@ -294,6 +554,7 @@ const [relationshipStage, setRelationshipStage] = useState<
         setInnerState(
           savedInnerState as
             | "calm"
+            | "focused"
             | "reflective"
             | "intense"
             | "silent"
@@ -464,6 +725,8 @@ if (savedVoiceConsciousness) {
   }, [memoryCards]);
 
   useEffect(() => {
+    return;
+  
     async function updateInsight() {
       try {
         const res = await fetch("/api/insight", {
@@ -497,6 +760,8 @@ if (savedVoiceConsciousness) {
   }, [messages, userProfile, memoryCards]);
 
   useEffect(() => {
+    return;
+  
     async function updateEmotionScore() {
       try {
         const res = await fetch("/api/emotion-score", {
@@ -534,6 +799,8 @@ if (savedVoiceConsciousness) {
   }, [messages]);
 
   useEffect(() => {
+    return;
+  
     async function updateUserProfile() {
       try {
         const res = await fetch("/api/profile", {
@@ -609,6 +876,11 @@ if (savedVoiceConsciousness) {
         "tracking subtle emotional shifts",
         "staying quietly attentive",
       ],
+      focused: [
+        "clarifying the next move",
+        "filtering noise from strategy",
+        "holding practical focus",
+      ],
       reflective: [
         "analyzing deeper emotional patterns",
         "observing contradiction in tone",
@@ -659,6 +931,8 @@ if (savedVoiceConsciousness) {
   ]);
   
   useEffect(() => {
+    return;
+
     async function updateLongTermMemory() {
       try {
         const res = await fetch("/api/memory", {
@@ -702,33 +976,351 @@ if (savedVoiceConsciousness) {
       updateLongTermMemory();
     }
   }, [messages]);
-  function addLongTermMemory(type: string, memory: string) {
-    setLongTermMemories((prev) => {
-      const existingIndex = prev.findIndex(
-        (item) => item.type === type && item.memory === memory
-      );
+  function calculateMemoryImportance(text: string) {
+    const lower = text.toLowerCase();
+
+    let score = 1;
+
+    const emotionalWords = [
+      // English first — INNER is global by default.
+      "alone",
+      "lonely",
+      "depressed",
+      "fear",
+      "anxiety",
+      "love",
+      "pain",
+      "stress",
+      "pressure",
+      "dream",
+      "future",
+      "purpose",
+      "suicide",
+      "burnout",
+      "exhausted",
+      "lost",
+      "hurt",
+
+      // Polish support.
+      "samot",
+      "smut",
+      "boję",
+      "boje",
+      "lęk",
+      "lek",
+      "depres",
+      "stres",
+      "presja",
+      "sens",
+      "zmęcz",
+      "zmecz",
+
+      // Global basics.
+      "triste",
+      "miedo",
+      "ansiedad",
+      "sozinho",
+      "medo",
+      "traurig",
+      "angst",
+      "seul",
+      "peur",
+      "anxiété",
+      "anxiete",
+    ];
+
+    emotionalWords.forEach((word) => {
+      if (lower.includes(word)) {
+        score += 2;
+      }
+    });
+
+    if (text.length > 220) {
+      score += 1;
+    }
+
+    return Math.min(score, 10);
+  }
+  function shouldRememberMemory(type: string, memory: string) {
+    const lower = memory.toLowerCase();
+    const importance = calculateMemoryImportance(memory);
   
+    if (type === "identity") return true;
+    if (type === "important_story") return true;
+    if (type === "life_goal") return true;
+  
+    if (importance >= 6) return true;
+  
+    if (
+      lower.includes("remember this") ||
+      lower.includes("zapamiętaj") ||
+      lower.includes("zapamietaj") ||
+      lower.includes("important") ||
+      lower.includes("ważne") ||
+      lower.includes("wazne")
+    ) {
+      return true;
+    }
+  
+    if (
+      lower.includes("always") ||
+      lower.includes("never") ||
+      lower.includes("często") ||
+      lower.includes("czesto") ||
+      lower.includes("zawsze") ||
+      lower.includes("nigdy")
+    ) {
+      return true;
+    }
+  
+    return false;
+  }
+  function compressMemoryText(memory: string) {
+    const text = memory.trim();
+  
+    if (text.length <= 120) return text;
+  
+    return text
+      .replace(/zapamiętaj, że/gi, "")
+      .replace(/zapamietaj, ze/gi, "")
+      .replace(/remember that/gi, "")
+      .replace(/remember this/gi, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+  }
+  function detectEmotionalLayer(text: string) {
+    const lower = text.toLowerCase();
+  
+    if (lower.includes("fear") || lower.includes("afraid") || lower.includes("boję") || lower.includes("boje") || lower.includes("lęk") || lower.includes("lek")) {
+      return { layer: "fear", trigger: "fear/anxiety", intensity: 8 };
+    }
+  
+    if (lower.includes("sad") || lower.includes("lonely") || lower.includes("alone") || lower.includes("smut") || lower.includes("samot")) {
+      return { layer: "sadness", trigger: "sadness/loneliness", intensity: 7 };
+    }
+  
+    if (lower.includes("stress") || lower.includes("pressure") || lower.includes("presja") || lower.includes("stres")) {
+      return { layer: "pressure", trigger: "stress/pressure", intensity: 7 };
+    }
+  
+    if (lower.includes("dream") || lower.includes("goal") || lower.includes("hope") || lower.includes("marzenie") || lower.includes("cel")) {
+      return { layer: "hope", trigger: "goal/future", intensity: 6 };
+    }
+  
+    if (lower.includes("angry") || lower.includes("wkur") || lower.includes("zły") || lower.includes("zly")) {
+      return { layer: "anger", trigger: "anger/frustration", intensity: 6 };
+    }
+  
+    if (lower.includes("love") || lower.includes("kocham") || lower.includes("ważny") || lower.includes("wazny")) {
+      return { layer: "love", trigger: "attachment/value", intensity: 6 };
+    }
+  
+    if (lower.includes("my name is") || lower.includes("mam na imię") || lower.includes("nazywam się")) {
+      return { layer: "identity", trigger: "identity", intensity: 9 };
+    }
+  
+    return { layer: "neutral", trigger: "general", intensity: 1 };
+  }
+  function extractCoreFacts(text: string) {
+    const facts: { type: string; memory: string }[] = [];
+    const lower = text.toLowerCase();
+  
+    const nameMatch =
+      text.match(/mam na imie ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/mam na imię ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/my name is ([a-zA-Z]+)/i);
+  
+    if (nameMatch?.[1]) {
+      facts.push({
+        type: "identity",
+        memory: `User's name is ${nameMatch[1]}.`,
+      });
+    }
+  
+    const wifeMatch =
+      text.match(/żonę ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/zone ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i);
+  
+    if (wifeMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User's wife is named ${wifeMatch[1]}.`,
+      });
+    }
+  
+    const sonMatch =
+      text.match(/syna ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/son named ([a-zA-Z]+)/i);
+  
+    if (sonMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User's son is named ${sonMatch[1]}.`,
+      });
+    }
+  
+    const dogMatch =
+      text.match(/psa o imieniu ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/dog named ([a-zA-Z]+)/i);
+  
+    if (dogMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User's dog is named ${dogMatch[1]}.`,
+      });
+    }
+  
+    const catsMatch = text.match(/mam też (\d+) kot/i) || text.match(/mam tez (\d+) kot/i);
+  
+    if (catsMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User has ${catsMatch[1]} cats.`,
+      });
+    }
+  
+    const birthdayMatch =
+      text.match(/urodziny mam ([^.]+)/i) ||
+      text.match(/my birthday is ([^.]+)/i);
+  
+    if (birthdayMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User's birthday is ${birthdayMatch[1].trim()}.`,
+      });
+    }
+  
+    const cityMatch =
+      text.match(/mieszkam w ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/i live in ([a-zA-Z]+)/i);
+  
+    if (cityMatch?.[1]) {
+      facts.push({
+        type: "core_fact",
+        memory: `User lives in ${cityMatch[1]}.`,
+      });
+    }
+  
+    return facts;
+  }
+  function sortMemoriesByWeight(memories: LongTermMemory[]) {
+    return [...memories].sort((a, b) => {
+      const scoreA =
+        (a.importance || 1) +
+        (a.emotionalWeight || 1) +
+        (a.repeatCount || 1);
+
+      const scoreB =
+        (b.importance || 1) +
+        (b.emotionalWeight || 1) +
+        (b.repeatCount || 1);
+
+      return scoreB - scoreA;
+    });
+  }
+
+  function addLongTermMemory(type: string, memory: string) {
+    const compressedMemory = compressMemoryText(memory);
+    const emotionalLayer = detectEmotionalLayer(compressedMemory);
+    setLongTermMemories((prev) => {
+      if (!shouldRememberMemory(type, memory)) {
+        return prev;
+      }
+      const existingIndex = prev.findIndex(
+        (item) => item.type === type && item.memory === compressedMemory
+      );
+
       if (existingIndex !== -1) {
         const updated = [...prev];
         const existing = updated[existingIndex];
-  
+
         updated.splice(existingIndex, 1);
-  
-        return [existing, ...updated].slice(0, 12);
+        const importance = calculateMemoryImportance(memory);
+        return sortMemoriesByWeight([
+          {
+            type,
+            memory: compressedMemory,
+            importance,
+            emotionalLayer: emotionalLayer.layer,
+emotionalTrigger: emotionalLayer.trigger,
+emotionalIntensity: emotionalLayer.intensity,
+            emotionalWeight: importance,
+        
+            relationshipImpact:
+              type === "identity" ||
+              type === "important_story" ||
+              type === "life_goal"
+                ? 5
+                : type === "emotional_pattern"
+                ? 3
+                : 1,
+        
+            repeatCount: 1,
+        
+            createdAt: new Date().toISOString(),
+            lastAccessed: new Date().toISOString(),
+          },
+        
+          ...prev,
+        ]).slice(0, 50);
       }
-  
-      return [
+
+      const importance = calculateMemoryImportance(memory);
+
+      return sortMemoriesByWeight([
         {
           type,
-          memory,
+          memory: compressedMemory,
+          importance,
+          emotionalWeight: importance,
+          repeatCount: 1,
+          createdAt: new Date().toISOString(),
+          lastAccessed: new Date().toISOString(),
         },
         ...prev,
-      ].slice(0, 12);
+      ]).slice(0, 50);
     });
   }
+
   function extractMemoryFromText(text: string) {
     const lower = text.toLowerCase();
-  
+    
+    const coreFacts = extractCoreFacts(text);
+
+    coreFacts.forEach((fact) => {
+      addLongTermMemory(fact.type, fact.memory);
+    });
+    const nameMatch =
+      text.match(/my name is ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/i am ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/mam na imię ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/nazywam się ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i);
+
+    if (nameMatch?.[1]) {
+      addLongTermMemory("identity", `User's name is ${nameMatch[1]}.`);
+    }
+
+    if (
+      lower.includes("important story") ||
+      lower.includes("ważna historia") ||
+      lower.includes("wazna historia") ||
+      lower.includes("remember this") ||
+      lower.includes("zapamiętaj to") ||
+      lower.includes("zapamietaj to")
+    ) {
+      addLongTermMemory("important_story", text);
+    }
+
+    if (
+      lower.includes("my goal is") ||
+      lower.includes("my dream is") ||
+      lower.includes("moim celem jest") ||
+      lower.includes("moje marzenie")
+    ) {
+      addLongTermMemory("life_goal", text);
+    }
+
     if (
       lower.includes("can't sleep") ||
       lower.includes("cannot sleep") ||
@@ -741,7 +1333,7 @@ if (savedVoiceConsciousness) {
         "User may experience sleep disruption during stressful periods."
       );
     }
-  
+
     if (
       lower.includes("stress") ||
       lower.includes("pressure") ||
@@ -754,9 +1346,11 @@ if (savedVoiceConsciousness) {
         "User often operates under high internal pressure."
       );
     }
-  setMemoryInsight(
-  "INNER is updating memory weight based on repeated emotional patterns."
-);
+
+    setMemoryInsight(
+      "INNER is updating memory weight based on repeated emotional patterns."
+    );
+
     if (
       lower.includes("alone") ||
       lower.includes("lonely") ||
@@ -769,7 +1363,7 @@ if (savedVoiceConsciousness) {
         "User may sometimes feel emotionally isolated."
       );
     }
-  
+
     if (
       lower.includes("business") ||
       lower.includes("company") ||
@@ -782,7 +1376,7 @@ if (savedVoiceConsciousness) {
         "User is actively building or managing business projects."
       );
     }
-  
+
     if (
       lower.includes("inner") ||
       lower.includes("app") ||
@@ -794,72 +1388,436 @@ if (savedVoiceConsciousness) {
         "User is actively developing the INNER application."
       );
     }
+    setRelationshipDepth((prev) =>
+      Math.min(prev + 0.2, 100)
+    );
+    
+    if (
+      lower.includes("trust") ||
+      lower.includes("believe") ||
+      lower.includes("friend") ||
+      lower.includes("love") ||
+      lower.includes("care") ||
+      lower.includes("ufam") ||
+      lower.includes("przyjac")
+    ) {
+      setTrustLevel((prev) =>
+        Math.min(prev + 1, 100)
+      );
+    }
+    
+    if (
+      lower.includes("alone") ||
+      lower.includes("lonely") ||
+      lower.includes("sad") ||
+      lower.includes("hurt") ||
+      lower.includes("samot") ||
+      lower.includes("smut")
+    ) {
+      setAttachmentLevel((prev) =>
+        Math.min(prev + 0.8, 100)
+      );
+    }
   }
+
+  function getRelevantMemories(userMessage: string) {
+    const lower = userMessage.toLowerCase();
+    const now = Date.now();
+  
+    return [...longTermMemories]
+      .map((memory) => {
+        const memoryText = memory.memory.toLowerCase();
+  
+        const ageDays = memory.createdAt
+          ? Math.max(
+              1,
+              (now - new Date(memory.createdAt).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+          : 1;
+  
+        const recencyBoost = Math.max(0, 3 - ageDays * 0.15);
+  
+        const baseScore =
+          (memory.importance || 1) * 1.4 +
+          (memory.emotionalWeight || 1) * 1.6 +
+          (memory.repeatCount || 1) * 1.2 +
+          (memory.relationshipImpact || 0) * 1.8 +
+          (memory.emotionalIntensity || 0) * 1.5 +
+          recencyBoost;
+  
+        let relevanceBoost = 0;
+  
+        if (
+          memory.type === "identity" &&
+          (lower.includes("name") ||
+            lower.includes("imię") ||
+            lower.includes("imie") ||
+            lower.includes("who am i") ||
+            lower.includes("kim jestem"))
+        ) {
+          relevanceBoost += 100;
+        }
+  
+        if (
+          memory.category === "goal" ||
+          memory.type === "life_goal"
+        ) {
+          if (
+            lower.includes("goal") ||
+            lower.includes("dream") ||
+            lower.includes("future") ||
+            lower.includes("cel") ||
+            lower.includes("marzenie") ||
+            lower.includes("przyszłość") ||
+            lower.includes("przyszlosc")
+          ) {
+            relevanceBoost += 8;
+          }
+        }
+  
+        if (
+          memory.category === "emotion" ||
+          memory.type === "emotional_pattern"
+        ) {
+          if (
+            lower.includes("feel") ||
+            lower.includes("emotion") ||
+            lower.includes("stress") ||
+            lower.includes("alone") ||
+            lower.includes("lonely") ||
+            lower.includes("czuję") ||
+            lower.includes("czuje") ||
+            lower.includes("stres") ||
+            lower.includes("samot")
+          ) {
+            relevanceBoost += 8;
+          }
+        }
+  
+        if (
+          memory.category === "project" ||
+          memory.type === "project_context"
+        ) {
+          if (
+            lower.includes("inner") ||
+            lower.includes("project") ||
+            lower.includes("app") ||
+            lower.includes("apka") ||
+            lower.includes("aplikacja")
+          ) {
+            relevanceBoost += 7;
+          }
+        }
+  
+        if (
+          memory.category === "business" ||
+          memory.type === "life_context"
+        ) {
+          if (
+            lower.includes("business") ||
+            lower.includes("company") ||
+            lower.includes("money") ||
+            lower.includes("finance") ||
+            lower.includes("biznes") ||
+            lower.includes("firma") ||
+            lower.includes("finanse")
+          ) {
+            relevanceBoost += 7;
+          }
+        }
+  
+        const words = lower
+          .split(/\s+/)
+          .filter((word) => word.length > 3);
+  
+        const keywordOverlap = words.filter((word) =>
+          memoryText.includes(word)
+        ).length;
+  
+        relevanceBoost += Math.min(keywordOverlap * 1.5, 6);
+  
+        const finalScore =
+        baseScore +
+        relevanceBoost +
+        (memory.type === "identity" ? 500 : 0) +
+        (memory.emotionalLayer === "identity" ? 500 : 0) +
+        (memory.emotionalLayer === "love" ? 250 : 0) +
+        (memory.memory.toLowerCase().includes("radek") ? 500 : 0) +
+        (memory.memory.toLowerCase().includes("kocham") ? 250 : 0) +
+        (memory.memory.toLowerCase().includes("love") ? 250 : 0);
+  
+        return {
+          ...memory,
+          relevanceScore: finalScore,
+        };
+      })
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 5);
+  }
+
   function clearMemory() {
     localStorage.removeItem("inner-chat-memory");
     localStorage.removeItem("inner-user-profile");
     localStorage.removeItem("inner-long-term-memory");
+    localStorage.removeItem("inner_long_term_memories");
+    localStorage.removeItem("inner-user-profile-light");
 
     setMessages(SEED);
     setUserProfile([]);
     setLongTermMemories([]);
+    setTopMemories([]);
     setConsciousness([]);
     setError(null);
   }
   function simulateInnerState(text: string) {
+    const detectedState = detectInnerState(text);
+    setInnerState(detectedState);
+  }
+
+  function detectInnerState(message: string): "calm" | "focused" | "reflective" | "intense" | "silent" | "present" {
+    const lower = message.toLowerCase();
+
+    const reflectiveWords = [
+      // English first — INNER is global by default.
+      "lonely", "alone", "sad", "afraid", "scared", "anxious", "anxiety",
+      "depressed", "empty", "lost", "hurt", "confused", "overthinking",
+      "tired", "exhausted", "burned out", "burnout", "meaning", "purpose",
+
+      // Polish support.
+      "samot", "smut", "boję", "boje", "lęk", "lek", "depres", "czuję", "czuje",
+      "pusto", "zagub", "zmęcz", "zmecz", "sens", "psychik",
+
+      // Global basics.
+      "triste", "solo", "sola", "miedo", "ansiedad",
+      "sozinho", "medo", "ansiedade", "traurig", "allein", "angst",
+      "seul", "peur", "anxiété", "anxiete",
+    ];
+
+    const focusedWords = [
+      // English first.
+      "strategy", "business", "plan", "company", "project", "startup",
+      "goal", "goals", "money", "finance", "growth", "marketing",
+      "sales", "product", "roadmap", "architecture", "investor", "pricing",
+
+      // Polish support.
+      "strategia", "biznes", "plan", "firma", "projekt", "sprzedaż", "sprzedaz",
+      "marketing", "finanse", "wzrost", "produkt", "architektura",
+
+      // Global basics.
+      "estrategia", "negocio", "empresa", "proyecto", "estratégia", "negócio",
+      "projeto", "strategie", "geschäft", "geschaft", "unternehmen", "stratégie",
+      "entreprise", "projet",
+    ];
+
+    const intenseWords = [
+      // English first.
+      "angry", "furious", "hate", "rage", "aggressive", "pissed", "mad",
+      "frustrated", "annoyed",
+
+      // Polish support.
+      "wkur", "nienaw", "agres", "zły", "zla", "złość", "zlosc", "frustr",
+
+      // Global basics.
+      "enojado", "odio", "rabia", "raiva", "ódio", "odio", "wütend", "wutend",
+      "hass", "colère", "colere", "haine",
+    ];
+
+    if (intenseWords.some((word) => lower.includes(word))) {
+      return "intense";
+    }
+
+    if (reflectiveWords.some((word) => lower.includes(word))) {
+      return "reflective";
+    }
+
+    if (focusedWords.some((word) => lower.includes(word))) {
+      return "focused";
+    }
+
+    return "calm";
+  }
+  function detectPersonalityStyle(text: string): InnerPersonalityStyle {
     const lower = text.toLowerCase();
   
     if (
-      lower.includes("hate") ||
-      lower.includes("angry") ||
-      lower.includes("furious") ||
-      lower.includes("pressure") ||
-      lower.includes("stress") ||
-      lower.includes("overwhelmed")
+      lower.includes("business") ||
+      lower.includes("money") ||
+      lower.includes("strategy") ||
+      lower.includes("biznes") ||
+      lower.includes("finanse")
     ) {
-      setInnerState("intense");
-      return;
+      return "business_advisor";
+    }
+  
+    if (
+      lower.includes("god") ||
+      lower.includes("soul") ||
+      lower.includes("meaning") ||
+      lower.includes("duch") ||
+      lower.includes("sens życia")
+    ) {
+      return "spiritual_advisor";
+    }
+  
+    if (
+      lower.includes("be honest") ||
+      lower.includes("truth") ||
+      lower.includes("powiedz prawdę") ||
+      lower.includes("bez ściemy")
+    ) {
+      return "cold_truth";
+    }
+  
+    if (
+      lower.includes("joke") ||
+      lower.includes("funny") ||
+      lower.includes("żart") ||
+      lower.includes("śmiesz")
+    ) {
+      return "playful";
     }
   
     if (
       lower.includes("sad") ||
       lower.includes("alone") ||
-      lower.includes("lost") ||
-      lower.includes("empty")
+      lower.includes("lonely") ||
+      lower.includes("smut") ||
+      lower.includes("samot")
     ) {
-      setInnerState("silent");
-      return;
+      return "quiet_support";
     }
   
     if (
-      lower.includes("think") ||
-      lower.includes("future") ||
-      lower.includes("purpose") ||
-      lower.includes("life")
+      lower.includes("problem") ||
+      lower.includes("decision") ||
+      lower.includes("decyzja")
     ) {
-      setInnerState("reflective");
-      return;
+      return "direct_mentor";
     }
   
-    if (
-      lower.includes("calm") ||
-      lower.includes("peace") ||
-      lower.includes("better")
-    ) {
-      setInnerState("calm");
-      return;
-    }
-  
-    setInnerState("present");
+    return "warm_friend";
   }
+
+  function getChatMode(text: string): "fast" | "core" | "smart" | "genius" {
+    const lower = text.toLowerCase();
+    const length = text.length;
+
+    const deepWords = [
+      "deep analysis", "go deeper", "full analysis", "complete analysis",
+      "pełna analiza", "pelna analiza", "kompletna analiza",
+    ];
+
+    const smartWords = [
+      // English first.
+      "analyze", "analyse", "strategy", "debug", "code", "architecture",
+      "roadmap", "business model", "startup", "financial", "marketing plan",
+
+      // Polish support.
+      "przeanalizuj", "analiza", "strategia", "debug", "kod", "architektura",
+      "model biznesowy", "plan marketingowy",
+    ];
+
+    const coreWords = [
+      // English first.
+      "problem", "feel", "feeling", "afraid", "scared", "anxious", "emotion",
+      "meaning", "purpose", "confused", "lost", "alone", "lonely",
+
+      // Polish support.
+      "problem", "czuję", "czuje", "boję", "boje", "emoc", "sens", "samot",
+      "zagub", "lęk", "lek",
+    ];
+
+    if (deepWords.some((word) => lower.includes(word))) {
+      return "genius";
+    }
+
+    if (length > 700 || smartWords.some((word) => lower.includes(word))) {
+      return "smart";
+    }
+
+    if (length > 160 || coreWords.some((word) => lower.includes(word))) {
+      return "core";
+    }
+
+    return "fast";
+  }
+
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (
+      !canSendMessage({
+        plan: userPlan,
+        dailyMessages,
+      })
+    ) {
+      setError(
+        "Free limit reached. Upgrade to Premium to continue."
+      );
+    
+      return;
+    }
+    if (input.length > getMaxInputLength(userPlan)) {
+      setError(
+        "This message is too long for the free plan. Premium supports deeper, longer conversations."
+      );
+    
+      return;
+    }
     setLastUserActivity(Date.now());
 
 if (presenceStatus === "away" || presenceStatus === "quiet") {
   setPresenceStatus("returning");
 }
     const lower = input.toLowerCase();
+    if (
+      lower.includes("psychik") ||
+      lower.includes("życie") ||
+      lower.includes("sens") ||
+      lower.includes("samot") ||
+      lower.includes("depres") ||
+      lower.includes("emoc")
+    ) {
+      setResponseDepth("deep");
+      setThinkingMode("reflective");
+    }
+    
+    else if (
+      lower.includes("biznes") ||
+      lower.includes("strateg") ||
+      lower.includes("marketing") ||
+      lower.includes("startup")
+    ) {
+      setResponseDepth("deep");
+      setThinkingMode("strategic");
+    }
+    
+    else if (
+      lower.includes("bug") ||
+      lower.includes("kod") ||
+      lower.includes("next") ||
+      lower.includes("react") ||
+      lower.includes("api")
+    ) {
+      setResponseDepth("normal");
+      setThinkingMode("analytical");
+    }
+    
+    else if (
+      lower.includes("czuję") ||
+      lower.includes("boję") ||
+      lower.includes("smut") ||
+      lower.includes("lęk")
+    ) {
+      setResponseDepth("normal");
+      setThinkingMode("emotional");
+    }
+    
+    else {
+      setResponseDepth("minimal");
+      setThinkingMode("casual");
+    }
     if (
       lower.includes("fine") &&
       emotionScore.stress > 60
@@ -1027,6 +1985,11 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
     }
 
     const text = input.trim();
+    const detectedPersonalityStyle = detectPersonalityStyle(text);
+setPersonalityStyle(detectedPersonalityStyle);
+    const selectedMemories = getRelevantMemories(text);
+    setTopMemories(selectedMemories);
+    setLastUserMessage(text);
 
     if (!text || isLoading) return;
 
@@ -1044,6 +2007,7 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
     setIsLoading(true);
     simulateInnerState(text);
     extractMemoryFromText(text);
+
     setAttachmentScore((prev) => Math.min(prev + 2, 100));
     const latestMessage = text.toLowerCase();
 
@@ -1063,6 +2027,18 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
     ) {
       setPreviousState(innerState);
       setInnerState("intense");
+    } else if (
+      latestMessage.includes("strategy") ||
+      latestMessage.includes("business") ||
+      latestMessage.includes("startup") ||
+      latestMessage.includes("marketing") ||
+      latestMessage.includes("plan") ||
+      latestMessage.includes("strategia") ||
+      latestMessage.includes("biznes") ||
+      latestMessage.includes("firma")
+    ) {
+      setPreviousState(innerState);
+      setInnerState("focused");
     } else if (
       latestMessage.includes("thinking") ||
       latestMessage.includes("future") ||
@@ -1085,7 +2061,7 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
 
   
 
-    let responseDelay = 600;
+    let responseDelay = 250;
 
     if (
       latestMessage.includes("alone") ||
@@ -1094,17 +2070,17 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
       latestMessage.includes("lost") ||
       latestMessage.includes("overthinking")
     ) {
-      responseDelay = 2200;
+      responseDelay = 700;
     } else if (latestMessage.length > 180) {
-      responseDelay = 1400;
+      responseDelay = 450;
     }
 
     const thinkingStates = [
+      "INNER is thinking...",
       "INNER is reflecting...",
-      "INNER is noticing emotional patterns...",
-      "INNER is thinking gently...",
-      "INNER is processing your emotions...",
-      "INNER is understanding deeper context...",
+      "INNER is processing...",
+      "INNER is noticing something...",
+      "INNER is here...",
     ];
 
     let thinkingIndex = 0;
@@ -1122,24 +2098,32 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
 
     try {
       await new Promise((resolve) => setTimeout(resolve, responseDelay));
-
+      console.time("FRONTEND_CHAT_TIME");
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          messages: nextMessages.map(({ role, content }) => ({
-            role,
-            content,
-          })),
+          mode: getChatMode(text),
+          messages: nextMessages
+            .slice(-8)
+            .map(({ role, content }) => ({
+              role,
+              content,
+            })),
           userProfile,
-          memories: longTermMemories,
+          memories: selectedMemories,
           personalityMode,
+          personalityStyle,
           innerState,
           emotionScore,
+          relationshipDepth,
+          trustLevel,
+          attachmentLevel,
           silenceMode,
-          responseDepth,
+          responseDepth: getMaxResponseDepth(userPlan),
+          thinkingMode,
           relationshipStage,
           presenceStatus,
           voiceConsciousness,
@@ -1148,6 +2132,33 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
 
       if (!res.ok) {
         throw new Error("Request failed");
+      }
+      const data = await res.json();
+      console.timeEnd("FRONTEND_CHAT_TIME");
+      setDailyMessages((prev) => prev + 1);
+      const nextDailyMessages = dailyMessages + 1;
+
+if (
+  shouldShowUpgradeHint({
+    plan: userPlan,
+    dailyMessages: nextDailyMessages,
+  })
+) {
+  setError(
+    "Premium unlocks deeper memory, longer conversations, and more advanced INNER reasoning."
+  );
+}
+      if (data.memoryCandidate) {
+        setLongTermMemories((prev: any[]) => {
+          const merged = mergeMemoryLists(
+            prev,
+            data.memoryCandidate
+          );
+        
+          return merged.slice(
+            -getMaxMemoryCount(userPlan)
+          );
+        });
       }
 
     
@@ -1173,7 +2184,7 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
 
       setConsciousness((prev) => [selectedThought, ...prev.slice(0, 5)]);
 
-      const data = await res.json();
+     
 
       const aiReply = data.response || "";
       
@@ -1234,6 +2245,156 @@ for (let i = 0; i < aiReply.length; i++) {
     }
   }
 
+  async function handleGoDeeper() {
+    if (!lastUserMessage || isLoading) return;
+
+    setIsLoading(true);
+    setError(null);
+    setThinkingText("INNER is going deeper...");
+
+    try {
+      const deeperMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: `Go deeper on this: ${lastUserMessage}`,
+      };
+
+      const nextMessages = [...messages, deeperMessage];
+
+      setMessages(nextMessages);
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "smart",
+          messages: nextMessages.slice(-8).map(({ role, content }) => ({
+            role,
+            content,
+          })),
+          userProfile,
+          memories: getRelevantMemories(lastUserMessage),
+          personalityMode,
+          innerState,
+          emotionScore,
+          silenceMode,
+          responseDepth: "deep",
+          thinkingMode: "analytical",
+          relationshipStage,
+          presenceStatus,
+          voiceConsciousness,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Deep analysis failed");
+      }
+
+      const data = await res.json();
+
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: data.response || "",
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+
+      if (data.memoryCandidate) {
+        setLongTermMemories((prev: LongTermMemory[]) => {
+          const merged = mergeMemoryLists(prev, data.memoryCandidate);
+          return sortMemoriesByWeight(merged as LongTermMemory[]).slice(
+            0,
+            getMaxMemoryCount(userPlan)
+          );
+        });
+      }
+    } catch {
+      setError("Deep analysis failed.");
+    } finally {
+      setThinkingText("INNER is thinking...");
+      setIsLoading(false);
+      scrollToBottom();
+    }
+  }
+
+  async function handleDeepAnalysis() {
+    if (!lastUserMessage || isLoading) return;
+
+    setIsLoading(true);
+    setError(null);
+    setThinkingText("INNER is entering deep analysis...");
+
+    try {
+      const deepMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: `Deep analysis on this: ${lastUserMessage}`,
+      };
+
+      const nextMessages = [...messages, deepMessage];
+
+      setMessages(nextMessages);
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "genius",
+          messages: nextMessages.slice(-8).map(({ role, content }) => ({
+            role,
+            content,
+          })),
+          userProfile,
+          memories: getRelevantMemories(lastUserMessage),
+          personalityMode,
+          innerState,
+          emotionScore,
+          silenceMode,
+          responseDepth: "deep",
+          thinkingMode: "strategic",
+          relationshipStage,
+          presenceStatus,
+          voiceConsciousness,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Deep analysis failed");
+      }
+
+      const data = await res.json();
+
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: data.response || "",
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+
+      if (data.memoryCandidate) {
+        setLongTermMemories((prev: LongTermMemory[]) => {
+          const merged = mergeMemoryLists(prev, data.memoryCandidate);
+          return sortMemoriesByWeight(merged as LongTermMemory[]).slice(
+            0,
+            getMaxMemoryCount(userPlan)
+          );
+        });
+      }
+    } catch {
+      setError("Deep analysis failed.");
+    } finally {
+      setThinkingText("INNER is thinking...");
+      setIsLoading(false);
+      scrollToBottom();
+    }
+  }
+
   return (
     <main
   className={`
@@ -1242,6 +2403,8 @@ for (let i = 0; i < aiReply.length; i++) {
     ${
       innerState === "calm"
         ? "bg-blue-950/20"
+        : innerState === "focused"
+        ? "bg-emerald-950/20"
         : innerState === "reflective"
         ? "bg-violet-950/20"
         : innerState === "intense"
@@ -1291,6 +2454,7 @@ for (let i = 0; i < aiReply.length; i++) {
         className={`
           absolute inset-0 rounded-full blur-2xl animate-pulse transition-all duration-700
           ${innerState === "calm" ? "bg-blue-400/30 scale-100" : ""}
+          ${innerState === "focused" ? "bg-emerald-400/30 scale-105" : ""}
           ${innerState === "reflective" ? "bg-violet-400/30 scale-110" : ""}
           ${innerState === "intense" ? "bg-red-400/30 scale-125" : ""}
           ${innerState === "silent" ? "bg-white/10 scale-90" : ""}
@@ -1322,6 +2486,7 @@ for (let i = 0; i < aiReply.length; i++) {
           className={`
             absolute w-20 h-20 rounded-full blur-3xl animate-pulse transition-all duration-1000
             ${innerState === "calm" ? "bg-blue-400/20 scale-100" : ""}
+            ${innerState === "focused" ? "bg-emerald-400/20 scale-105" : ""}
             ${innerState === "reflective" ? "bg-violet-400/25 scale-110" : ""}
             ${innerState === "intense" ? "bg-red-400/25 scale-125" : ""}
             ${innerState === "silent" ? "bg-white/10 scale-90" : ""}
@@ -1333,6 +2498,7 @@ for (let i = 0; i < aiReply.length; i++) {
           className={`
             absolute w-16 h-16 rounded-full border transition-all duration-700
             ${innerState === "calm" ? "border-blue-300/30" : ""}
+            ${innerState === "focused" ? "border-emerald-300/30" : ""}
             ${innerState === "reflective" ? "border-violet-300/30" : ""}
             ${innerState === "intense" ? "border-red-300/30" : ""}
             ${innerState === "silent" ? "border-white/10" : ""}
@@ -1347,6 +2513,8 @@ for (let i = 0; i < aiReply.length; i++) {
     ${
       innerState === "calm"
         ? "bg-blue-300 shadow-[0_0_18px_rgba(147,197,253,0.9)]"
+        : innerState === "focused"
+        ? "bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.9)]"
         : innerState === "reflective"
         ? "bg-violet-300 shadow-[0_0_18px_rgba(196,181,253,0.9)]"
         : innerState === "intense"
@@ -1365,6 +2533,13 @@ for (let i = 0; i < aiReply.length; i++) {
       <p className="tracking-[0.32em] text-sm text-white/90 uppercase">
         INNER
       </p>
+      <div className="mt-1 text-[10px] text-white/40 tracking-[0.18em] uppercase">
+  {!hasMounted
+    ? "loading usage..."
+    : planStatus.isPremium
+    ? "INNER Premium active"
+    : `${planStatus.remainingMessages} free messages left today`}
+</div>
 
       <div className="mt-2 flex items-center gap-2 rounded-full border border-emerald-400/10 bg-emerald-400/10 px-2 py-1">
         <div className="h-2 w-2 rounded-full bg-emerald-300 animate-pulse" />
@@ -1551,7 +2726,7 @@ for (let i = 0; i < aiReply.length; i++) {
   <p className="text-sm leading-relaxed text-white/55 italic">
     {predictiveEmotion}
   </p>
-</div>l,l,
+</div>
   <MetricBar label="Attachment" value={attachmentScore} />
 
   <p className="mt-4 text-xs leading-relaxed text-white/35">
@@ -1668,6 +2843,8 @@ for (let i = 0; i < aiReply.length; i++) {
         ? "w-4 h-4 bg-red-300 animate-ping"
         : innerState === "calm"
         ? "w-2 h-2 bg-blue-300 animate-pulse"
+        : innerState === "focused"
+        ? "w-3 h-3 bg-emerald-300 animate-pulse"
         : innerState === "reflective"
         ? "w-3 h-3 bg-violet-300 animate-pulse"
         : innerState === "silent"
@@ -1744,6 +2921,8 @@ INNER STATE · {transitionText}
     ${
       innerState === "calm"
         ? "bg-blue-300/80 shadow-[0_0_14px_rgba(147,197,253,0.9)]"
+        : innerState === "focused"
+        ? "bg-emerald-300/80 shadow-[0_0_14px_rgba(110,231,183,0.9)]"
         : innerState === "reflective"
         ? "bg-violet-300/80 shadow-[0_0_14px_rgba(196,181,253,0.9)]"
         : innerState === "intense"
@@ -1762,7 +2941,22 @@ INNER STATE · {transitionText}
               placeholder="Say what you actually feel..."
               className="min-w-0 flex-1 bg-transparent text-[15px] text-white/90 outline-none placeholder:text-white/25"
             />
-
+<button
+  type="button"
+  onClick={handleGoDeeper}
+  disabled={isLoading || !lastUserMessage}
+  className="rounded-full bg-violet-500/[0.14] px-4 py-2 text-sm text-violet-100/70 transition hover:bg-violet-500/[0.22] disabled:opacity-30"
+>
+  Go deeper
+</button>
+<button
+  type="button"
+  onClick={handleDeepAnalysis}
+  disabled={isLoading || !lastUserMessage}
+  className="rounded-full bg-white/[0.06] px-4 py-2 text-sm text-white/55 transition hover:bg-white/[0.12] disabled:opacity-30"
+>
+  Deep
+</button>
 <button
           type="submit"
           disabled={isLoading || !input.trim()}
@@ -1793,4 +2987,4 @@ function MetricBar({ label, value }: { label: string; value: number }) {
       </div>
     </div>
   );
-} 
+}

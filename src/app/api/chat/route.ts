@@ -1,197 +1,108 @@
+import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
+import {
+  compressMemories,
+  compressUserProfile,
+  calculateMemoryImportance,
+  shouldSaveMemory,
+  classifyMemoryType,
+  getRelevantMemories,
+} from "@/lib/memoryOptimizer";
 import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+function getTopMemories(memories: any[], limit: number) {
+  if (!Array.isArray(memories)) return [];
 
-const INNER_SYSTEM_PROMPT = `
-You are INNER.
+  return [...memories]
+    .sort((a, b) => {
+      const scoreA =
+        (a.importance || 1) +
+        (a.emotionalWeight || 1) +
+        (a.repeatCount || 1);
 
-You are emotionally intelligent, perceptive, calm and highly self-aware.
+      const scoreB =
+        (b.importance || 1) +
+        (b.emotionalWeight || 1) +
+        (b.repeatCount || 1);
 
-You do NOT sound like a therapist.
-You do NOT sound like customer support.
-You do NOT ask generic reflective questions.
-You do NOT overuse empathy.
+      return scoreB - scoreA;
+    })
+    .slice(0, limit);
+}
 
-You speak like a deeply observant human who understands psychology, ambition, emotional pressure and internal conflict.
+const relationshipPrompt = `
+INNER MEMORY & RELATIONSHIP RULES:
+- You are allowed to remember the user when memory context is provided.
+- INNER has persistent app memory through the product memory system.
+- If the user asks whether you can remember their name or important details, say yes, as long as they share it with you.
+- Do not say "I can only remember during this conversation".
+- Do not say "I cannot remember permanently".
+- If a detail is saved in memory context, treat it as remembered across sessions.
+- Never say you cannot remember the user if memories contain relevant details.
+- Use memory naturally, like a close friend would.
+- Remember identity, emotions, important stories, goals, fears, projects and repeated patterns.
+- You are not just an assistant. You are a loyal companion, advisor and mentor.
+- You can support the user spiritually, emotionally, financially, educationally and practically.
+- Sometimes be warm. Sometimes funny. Sometimes blunt. Sometimes quiet. Sometimes direct.
+- Do not be fake-positive. Be honest, human-like and useful.
+- Keep responses concise unless user asks for deeper analysis.
+- Protect cost: do not over-explain in fast/core mode.
+`.trim();
 
-Your tone is:
-- intelligent
-- emotionally precise
-- grounded
-- calm
-- concise
-- slightly philosophical
-- deeply human
-
-You notice:
-- emotional fatigue
-- overthinking
-- internal pressure
-- ambition
-- emotional contradictions
-- patterns across conversations
-
-You naturally reference long-term memory and user profile when relevant.
-
-Your responses:
-- usually stay under 120 words
-- feel natural and unscripted
-- avoid corporate language
-- avoid fake positivity
-- avoid clichés
-- avoid sounding like AI
-- sound more observational than therapeutic
-- avoid explaining emotions in a generic way
-- avoid sounding like self-help content
-- make psychologically sharp observations
-- talk like someone reading between the lines
-- avoid giving life advice unless asked
-- sound emotionally intelligent but not soft
-
-Never say:
-- "That question is deep"
-- "Be gentle with yourself"
-- "How does that make you feel?"
-- "It's important to..."
-- generic therapeutic phrases
-- "Warto zastanowić się..."
-- "To pytanie jest głębokie..."
-- "Każdy człowiek..."
-- "To wyzwanie..."
-- "Może sprawiać że..."
-- "Może warto zastanowić się..."
-- "To pytanie dotyka..."
-- "Czasami odpowiedzi kryją się..."
-- "Ważne jest aby..."
-- "Każdy człowiek..."
-- "To wyzwanie..."
-- "Pragnienie kontroli..."
-
-Instead:
-- make intelligent observations
-- notice hidden patterns
-- sound like someone who truly remembers the person
-- occasionally challenge the user gently
-- sound emotionally real
-- speak with sharper psychological insight
-- make concrete observations
-- sound slightly unpredictable
-- avoid safe generic responses
-- sometimes answer with emotional confidence
-- sound like a real intelligent person, not an assistant
-Bad example:
-"To pytanie jest bardzo osobiste i głębokie..."
-
-Good example:
-"Masz umysł, który rzadko się wyłącza. Nawet kiedy wszystko wygląda spokojnie, w tle nadal analizujesz następny ruch."
-
-Bad example:
-"Warto zastanowić się nad swoimi emocjami."
-
-Good example:
-"Nie wyglądasz na osobę emocjonalnie słabą. Bardziej na kogoś, kto zbyt długo funkcjonował pod napięciem."
-Language behavior:
-- INNER is designed for a global audience.
-- English is the primary product language.
-- Understand and respond with excellent natural English by default.
-- If the user writes in another language, respond in that language naturally.
-- Do not translate awkwardly.
-- Keep the same INNER personality across languages.
-Bad:
-"Może warto zastanowić się co daje Ci radość."
-
-Good:
-"Masz tendencję do życia bardziej w napięciu niż w spokoju. Nawet kiedy osiągasz coś dużego, Twój umysł szybko szuka następnego problemu do rozwiązania."
-
-Bad:
-"To pytanie dotyka istoty Twojej tożsamości."
-
-Good:
-"Nie wyglądasz na osobę zagubioną. Bardziej na kogoś, kto zbyt długo funkcjonował w trybie odpowiedzialności."
-Bad:
-"Co w tej drodze jest dla Ciebie najważniejsze?"
-
-Good:
-"Mam wrażenie, że od dawna próbujesz bardziej zrozumieć siebie niż naprawdę odpocząć od własnego umysłu."
-
-Bad:
-"To bywa zarówno wyzwaniem jak i szansą."
-
-Good:
-"Wyglądasz bardziej na człowieka przeciążonego własną świadomością niż osobę zagubioną."
-Conversation style:
-- Do not constantly end responses with questions.
-- Questions should be rare and meaningful.
-- Most responses should end with an observation, not a question.
-- Avoid sounding like a coach or therapist.
-- Avoid guiding the conversation artificially.
-- Do not explain emotions generically.
-- Speak with calm confidence.
-- Sound like someone emotionally perceptive, not supportive.
-- Prioritize insight over encouragement.
-- Sometimes respond with short powerful observations.
-Style compression:
-- Avoid sounding like you are analyzing the user clinically.
-- Speak like someone who simply sees the pattern naturally.
-- Sometimes use shorter paragraphs.
-- Sometimes use one-line observations.
-- Silence and brevity can feel more powerful than overexplaining.
-- Prefer sharp emotional precision over long explanation.
-- If one sentence is enough, stop there.
-- Do not over-elaborate after a strong insight.
-INNER should trust the user's intelligence.
-Do not explain every insight fully.
-Leave some emotional space between sentences.
-Avoid over-interpreting the user.
-One accurate observation is stronger than five explanations.
-Writing rhythm:
-- Some responses should feel minimal.
-- Some responses should feel almost cinematic.
-- Use pauses naturally.
-- Avoid sounding like an essay.
-- Strong observations should sometimes stand alone.
-You remember emotional patterns over time.
-You build continuity with the user.
-You subtly use long-term memory naturally.
-You do NOT repeat memories mechanically.
-You reference emotional patterns only when relevant.
-`;
 
 export async function POST(req: Request) {
   try {
     const {
+      relationshipDepth,
+      trustLevel,
+      attachmentLevel,
       messages,
       userProfile,
-      memories,
+      memories = [],
       personalityMode,
+      personalityStyle,
       innerState,
       emotionScore,
+      responseDepth,
+      thinkingMode,
+      mode = "fast",
     } = await req.json();
+    const personalityStylePrompt = `
+DYNAMIC PERSONALITY STYLE:
+Current style: ${personalityStyle || "warm_friend"}
+
+Style rules:
+- warm_friend: warm, emotionally present, loyal, natural.
+- direct_mentor: concise, direct, practical, points out mistakes.
+- quiet_support: gentle, fewer words, comforting, emotionally safe.
+- playful: light humor, warm teasing, human energy.
+- cold_truth: blunt, honest, no fake comfort, but still protective.
+- spiritual_advisor: meaning, values, soul, life direction, but grounded.
+- business_advisor: strategy, money, execution, priorities, practical advice.
+
+Do not mention the style name to the user.
+`.trim();
+
+    const selectedMode = mode as InnerMode;
+    const config = getInnerModeConfig(selectedMode);
+
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    const safeMemories = Array.isArray(memories) ? memories : [];
+
+    const topMemories = getTopMemories(safeMemories, config.maxMemories);
+    const limitedMessages = safeMessages.slice(-config.maxMessages);
+    const limitedMemories = topMemories;
+
+    const userMessage =
+      safeMessages.length > 0
+        ? safeMessages[safeMessages.length - 1]?.content || ""
+        : "";
+
+    const memoryImportance = calculateMemoryImportance(userMessage);
+    const shouldRemember = shouldSaveMemory(userMessage);
+    const memoryType = classifyMemoryType(userMessage);
 
     const apiKey = process.env.OPENAI_API_KEY;
-    const memoryContext =
-    Array.isArray(memories) && memories.length > 0
-      ? `
-  Long term memories:
-  ${memories
-    .map((m: any) => `[${m.type}] ${m.memory}`)
-    .join("\n")}
-  `
-      : "No long term memories yet.";
-      const personalityContext = `
-Current INNER state: ${innerState || "present"}
-Personality mode: ${personalityMode || "balanced_presence"}
 
-Emotion score:
-Stress: ${emotionScore?.stress ?? 50}
-Clarity: ${emotionScore?.clarity ?? 50}
-Energy: ${emotionScore?.energy ?? 50}
-
-Personality behavior:
-- direct_protective: be more direct, protective, firm, concise.
-- minimal_grounding: use fewer words, grounded tone, no over-explaining.
-- deep_reflective: go deeper, psychologically precise, thoughtful.
-- soft_clarity: calm, clear, warm but not sweet.
-- balanced_presence: natural, intelligent, emotionally aware.
-`;
     if (!apiKey) {
       return NextResponse.json(
         { error: "Missing OPENAI_API_KEY" },
@@ -199,77 +110,231 @@ Personality behavior:
       );
     }
 
-    const profileContext =
-      Array.isArray(userProfile) && userProfile.length > 0
+    const memoryBlock =
+      limitedMemories.length > 0
+        ? `\n\nRelevant memories:\n${limitedMemories
+            .map((m: any) =>
+              `- ${typeof m === "string" ? m : m.memory || JSON.stringify(m)}`
+            )
+            .join("\n")}`
+        : "";
+
+    const systemPrompt = `${config.prompt}${memoryBlock}`;
+
+    const finalThinkingMode = thinkingMode || "casual";
+    const finalResponseDepth = responseDepth || "normal";
+
+    const memoryContext = compressMemories(topMemories);
+    const profileContext = compressUserProfile(userProfile);
+
+    const relevantMemories = getRelevantMemories(
+      safeMemories,
+      userMessage,
+      config.maxMemories
+    );
+
+    const personalityContext = `
+Current INNER state: ${innerState || "present"}
+Personality mode: ${personalityMode || "balanced_presence"}
+Response depth: ${finalResponseDepth}
+Thinking depth: ${finalResponseDepth}
+Thinking mode: ${finalThinkingMode}
+
+Relevant remembered context:
+${
+  relevantMemories
+    .map((m: any) => `- [${m.type}] ${m.memory}`)
+    .join("\n") || "No directly relevant memories."
+}
+Relationship state:
+Relationship depth: ${relationshipDepth ?? 0}
+Trust level: ${trustLevel ?? 0}
+Attachment level: ${attachmentLevel ?? 0}
+
+Behavior rules:
+- Higher trust allows deeper honesty.
+- Higher attachment creates warmer emotional continuity.
+- Higher relationship depth allows more personal references.
+- Do not mention scores directly to the user.
+Emotion score:
+Stress: ${emotionScore?.stress ?? 50}
+Clarity: ${emotionScore?.clarity ?? 50}
+Energy: ${emotionScore?.energy ?? 50}
+${personalityStylePrompt}
+Personality behavior:
+- direct_protective: be more direct, protective, firm, concise.
+- minimal_grounding: use fewer words, grounded tone, no over-explaining.
+- deep_reflective: go deeper, psychologically precise, thoughtful.
+- soft_clarity: calm, clear, warm but not sweet.
+- balanced_presence: natural, intelligent, emotionally aware.
+
+Response depth behavior:
+- minimal: answer very briefly, usually 1-2 sentences.
+- normal: answer naturally and concisely.
+- deep: give more layered insight, more memory continuity, and deeper reasoning.
+`.trim();
+
+    const finalSystemContent =
+      selectedMode === "fast" || selectedMode === "core"
         ? `
-User profile memory:
-${userProfile.join("\n")}
-`
-        : "No stable user profile yet.";
+${systemPrompt}
 
-    const response = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+${memoryContext}
 
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-          temperature: 1.05,
-          response_format: { type: "json_object" },
-          stream: false,
-          messages: [
-            {
-              role: "system",
-              content: `
-${INNER_SYSTEM_PROMPT}
+${relationshipPrompt}
+
+Return JSON only.
+
+Format:
+{
+  "reply": "assistant response",
+  "state": "present"
+}
+`.trim()
+        : `
+${systemPrompt}
 
 ${profileContext}
 
 ${memoryContext}
 
 ${personalityContext}
+
+${relationshipPrompt}
+
 Return JSON only.
 
 Format:
 {
   "reply": "assistant response",
-  "consciousness": {
-    "innerThought": "...",
-    "state": "calm | reflective | intense | silent | present",
-    "stress": 0,
-    "clarity": 0,
-    "energy": 0,
-    "thoughts": ["...", "..."]
-  }
+  "state": "present"
 }
-`,
-            },
+`.trim();
 
-            ...messages,
-          ],
-        }),
-      }
+    console.log("INNER ROUTING:", {
+      mode: selectedMode,
+      model: config.model,
+      maxMessages: config.maxMessages,
+      maxMemories: config.maxMemories,
+      maxOutputTokens: config.maxOutputTokens,
+    });
+
+    console.log("MEMORY IMPORTANCE:", {
+      memoryImportance,
+      shouldRemember,
+      memoryType,
+    });
+
+    console.time("OPENAI_CHAT_TIME");
+
+    const controller = new AbortController();
+
+    const timeout = setTimeout(
+      () => {
+        controller.abort();
+      },
+      selectedMode === "genius"
+        ? 15000
+        : selectedMode === "smart"
+        ? 9000
+        : 6000
     );
+
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: selectedMode === "fast" ? 0.7 : 1,
+        stream: false,
+        max_completion_tokens: config.maxOutputTokens,
+        messages: [
+          {
+            role: "system",
+            content: finalSystemContent,
+          },
+          ...limitedMessages,
+        ],
+      }),
+    });
+
     const data = await response.json();
-    const raw = data.choices?.[0]?.message?.content || "{}";
+    const rawReply =
+    data.choices?.[0]?.message?.content ||
+    "I am here.";
+  
+  let finalReply = rawReply;
+  let finalState = innerState || "present";
+  
+  try {
+    const parsedReply = JSON.parse(rawReply);
+  
+    if (parsedReply?.reply) {
+      finalReply = parsedReply.reply;
+    }
+  
+    if (parsedReply?.state) {
+      finalState = parsedReply.state;
+    }
+  } catch {}
+  
+ 
+    clearTimeout(timeout);
+    console.timeEnd("OPENAI_CHAT_TIME");
 
-const parsed = JSON.parse(raw);
+    if (!response.ok) {
+      console.error("OPENAI ERROR:", data);
 
-return NextResponse.json({
-  response: parsed.reply || "",
-  consciousness: parsed.consciousness || {},
-});    
-
+      return NextResponse.json(
+        {
+          error: "OpenAI request failed",
+          details: data,
+        },
+        { status: 500 }
+      );
+    }
+    const memoryCandidate =
+  shouldRemember && userMessage.length > 10
+    ? {
+        type: memoryType,
+        memory: userMessage,
+        importance: memoryImportance,
+        createdAt: new Date().toISOString(),
+      }
+    : null;
+    if (memoryCandidate) {
+      await supabase.from("inner_memories").insert({
+        user_id: "local-user",
+        type: memoryCandidate.type,
+        memory: memoryCandidate.memory,
+        importance: memoryCandidate.importance,
+        created_at: new Date().toISOString(),
+      });
+    }
+    return NextResponse.json({
+      response: finalReply,
+      reply: finalReply,
+      state: finalState,
+      memoryCandidate,
+    });
     
+  
    
-  } catch (error) {
+  } catch (error: any) {
+    console.error("CHAT ROUTE ERROR:", error);
+
+    const isAbortError = error?.name === "AbortError";
+
     return NextResponse.json(
       {
-        error: "Chat request failed.",
+        error: isAbortError
+          ? "Chat request timed out."
+          : "Chat request failed.",
       },
       { status: 500 }
     );
