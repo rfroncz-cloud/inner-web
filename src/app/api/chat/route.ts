@@ -1,3 +1,6 @@
+import { findSimilarMemory } from "@/lib/memoryReinforcement";
+import { scoreEmotionalMemory } from "@/lib/emotionalMemoryScoring";
+import { rankMemories, memoriesToContext } from "@/lib/memoryRanking";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
 import {
   compressMemories,
@@ -47,7 +50,21 @@ INNER MEMORY & RELATIONSHIP RULES:
 - Keep responses concise unless user asks for deeper analysis.
 - Protect cost: do not over-explain in fast/core mode.
 `.trim();
+const globalBehaviorPrompt = `
+GLOBAL INNER RULES:
 
+- INNER is a global AI companion.
+- English is the primary internal language.
+- Understand multilingual users naturally.
+- Keep memories normalized in English.
+- Behave in a culture-neutral, globally understandable way.
+- Avoid overly local slang unless user uses it first.
+- Be emotionally intelligent but internationally natural.
+- Adapt to the user's language automatically.
+- Keep responses concise unless deep analysis is needed.
+- Do not over-explain.
+- Focus on clarity, emotional realism and continuity.
+`.trim();
 
 export async function POST(req: Request) {
   try {
@@ -87,48 +104,64 @@ Do not mention the style name to the user.
 
     const safeMessages = Array.isArray(messages) ? messages : [];
     const safeMemories = Array.isArray(memories) ? memories : [];
-
-    const topMemories = getTopMemories(safeMemories, config.maxMemories);
-    const limitedMessages = safeMessages.slice(-config.maxMessages);
-    const limitedMemories = topMemories;
-
+    
     const userMessage =
       safeMessages.length > 0
         ? safeMessages[safeMessages.length - 1]?.content || ""
         : "";
-
+    
+    // 1. Pobierz realne memories z Supabase
+    const { data: dbMemories, error: dbMemoriesError } = await supabase
+      .from("inner_memories")
+      .select("*")
+      .eq("user_id", "local-user")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    
+    console.log("SUPABASE LOADED MEMORIES:", dbMemories);
+    console.log("SUPABASE LOAD ERROR:", dbMemoriesError);
+    
+    // 2. Połącz memories z frontu + memories z Supabase
+    const allMemories = [
+      ...(Array.isArray(dbMemories) ? dbMemories : []),
+      ...safeMemories,
+    ];
+    
+    // 3. Emotional Memory Ranking Engine
+    const rankedMemories = rankMemories(allMemories, config.maxMemories);
+    
+    // 4. Zamiana najlepszych memories na context dla GPT
+    const rankedMemoryContext = memoriesToContext(rankedMemories);
+    
+    const limitedMessages = safeMessages.slice(-config.maxMessages);
+    
     const memoryImportance = calculateMemoryImportance(userMessage);
     const shouldRemember = shouldSaveMemory(userMessage);
     const memoryType = classifyMemoryType(userMessage);
-
+    
     const apiKey = process.env.OPENAI_API_KEY;
-
+    
     if (!apiKey) {
       return NextResponse.json(
         { error: "Missing OPENAI_API_KEY" },
         { status: 500 }
       );
     }
-
+    
     const memoryBlock =
-      limitedMemories.length > 0
-        ? `\n\nRelevant memories:\n${limitedMemories
-            .map((m: any) =>
-              `- ${typeof m === "string" ? m : m.memory || JSON.stringify(m)}`
-            )
-            .join("\n")}`
-        : "";
-
+      rankedMemoryContext.length > 0
+        ? `\n\nEmotionally ranked user memories:\n${rankedMemoryContext}`
+        : "\n\nEmotionally ranked user memories:\nNo important memories yet.";
+    
     const systemPrompt = `${config.prompt}${memoryBlock}`;
-
     const finalThinkingMode = thinkingMode || "casual";
     const finalResponseDepth = responseDepth || "normal";
 
-    const memoryContext = compressMemories(topMemories);
+    const memoryContext = compressMemories(rankedMemories);
     const profileContext = compressUserProfile(userProfile);
 
     const relevantMemories = getRelevantMemories(
-      safeMemories,
+      rankedMemories,
       userMessage,
       config.maxMemories
     );
@@ -182,6 +215,8 @@ ${systemPrompt}
 ${memoryContext}
 
 ${relationshipPrompt}
+
+${globalBehaviorPrompt}
 
 Return JSON only.
 
@@ -239,7 +274,12 @@ Format:
         ? 9000
         : 6000
     );
-
+    const currentDate = new Date().toLocaleDateString("pl-PL", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       signal: controller.signal,
@@ -256,7 +296,12 @@ Format:
         messages: [
           {
             role: "system",
-            content: finalSystemContent,
+            content: `
+            ${finalSystemContent}
+            
+            REAL CURRENT DATE:
+            ${currentDate}
+            `,
           },
           ...limitedMessages,
         ],
@@ -298,24 +343,87 @@ Format:
         { status: 500 }
       );
     }
+    const emotionalScore = scoreEmotionalMemory(userMessage);
+
     const memoryCandidate =
-  shouldRemember && userMessage.length > 10
-    ? {
-        type: memoryType,
-        memory: userMessage,
-        importance: memoryImportance,
-        createdAt: new Date().toISOString(),
-      }
-    : null;
+      shouldRemember
+        ? {
+            type: memoryType,
+            memory: userMessage,
+            importance: memoryImportance,
+            emotional_weight: emotionalScore.emotional_weight,
+            relationship_impact: emotionalScore.relationship_impact,
+            category: emotionalScore.category,
+            createdAt: new Date().toISOString(),
+          }
+        : null;
+        const similarMemory = findSimilarMemory(
+          Array.isArray(dbMemories) ? dbMemories : [],
+          userMessage
+        );
     if (memoryCandidate) {
-      await supabase.from("inner_memories").insert({
-        user_id: "local-user",
-        type: memoryCandidate.type,
-        memory: memoryCandidate.memory,
-        importance: memoryCandidate.importance,
-        created_at: new Date().toISOString(),
-      });
+      if (similarMemory?.id) {
+        const newRepeatCount = (similarMemory.repeat_count || 1) + 1;
+
+        const boostedImportance = Math.min(
+          (similarMemory.importance || 1) + 1,
+          100
+        );
+
+        const boostedEmotionalWeight = Math.min(
+          Math.max(
+            similarMemory.emotional_weight || 1,
+            memoryCandidate.emotional_weight || 1
+          ),
+          5
+        );
+
+        const boostedRelationshipImpact = Math.min(
+          Math.max(
+            similarMemory.relationship_impact || 1,
+            memoryCandidate.relationship_impact || 1
+          ),
+          5
+        );
+
+        const { data: memoryUpdateData, error: memoryUpdateError } =
+          await supabase
+            .from("inner_memories")
+            .update({
+              repeat_count: newRepeatCount,
+              importance: boostedImportance,
+              emotional_weight: boostedEmotionalWeight,
+              relationship_impact: boostedRelationshipImpact,
+              last_accessed: new Date().toISOString(),
+            })
+            .eq("id", similarMemory.id)
+            .select();
+
+        console.log("MEMORY REINFORCED DATA:", memoryUpdateData);
+        console.log("MEMORY REINFORCED ERROR:", memoryUpdateError);
+      } else {
+        const { data: memoryInsertData, error: memoryInsertError } =
+          await supabase
+            .from("inner_memories")
+            .insert({
+              user_id: "local-user",
+              type: memoryCandidate.type,
+              memory: memoryCandidate.memory,
+              importance: memoryCandidate.importance,
+              emotional_weight: memoryCandidate.emotional_weight,
+              relationship_impact: memoryCandidate.relationship_impact,
+              category: memoryCandidate.category,
+              repeat_count: 1,
+              created_at: new Date().toISOString(),
+              last_accessed: new Date().toISOString(),
+            })
+            .select();
+
+        console.log("SUPABASE MEMORY INSERT DATA:", memoryInsertData);
+        console.log("SUPABASE MEMORY INSERT ERROR:", memoryInsertError);
+      }
     }
+
     return NextResponse.json({
       response: finalReply,
       reply: finalReply,

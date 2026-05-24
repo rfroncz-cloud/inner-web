@@ -1,5 +1,12 @@
 "use client";
-
+import {
+  protectModeByPlan,
+  getCostWarningLevel,
+} from "@/lib/costControl";
+import {
+  detectGlobalSignals,
+  normalizeMemoryToEnglish,
+} from "@/lib/globalSignals";
 import { mergeMemoryLists } from "@/lib/memoryOptimizer";
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -19,6 +26,10 @@ type Message = {
 };
 
 type LongTermMemory = {
+  entityName?: string;
+entityType?: "wife" | "husband" | "son" | "daughter" | "dog" | "cat" | "family" | "friend" | "partner" | "other";
+relationToUser?: string;
+relationshipPriority?: number;
   type: string;
   memory: string;
 
@@ -41,7 +52,6 @@ type LongTermMemory = {
 | "birthday"
 | "age"
 | "location"
-| "relationship"
 | "work"
     | "identity"
     | "emotion"
@@ -64,6 +74,7 @@ type InnerUserProfile = {
   mainTopics: string[];
   dominantMood: "calm" | "low" | "intense" | "ambitious" | "unclear";
 };
+
 type InnerPersonalityStyle =
   | "warm_friend"
   | "direct_mentor"
@@ -72,6 +83,13 @@ type InnerPersonalityStyle =
   | "cold_truth"
   | "spiritual_advisor"
   | "business_advisor";
+  type PresenceState =
+  | "calm"
+  | "thinking"
+  | "deep"
+  | "emotional"
+  | "analytical"
+  | "protective";
 
 const SEED: Message[] = [
   {
@@ -105,6 +123,8 @@ export function ChatUI() {
   const [relationshipDepth, setRelationshipDepth] = useState(0);
 const [trustLevel, setTrustLevel] = useState(0);
 const [attachmentLevel, setAttachmentLevel] = useState(0);
+const [presenceState, setPresenceState] =
+  useState<PresenceState>("calm");
   const [previousState, setPreviousState] = useState(innerState);
   const thinkingStates = {
     calm: "stabilizing emotional patterns",
@@ -116,7 +136,9 @@ const [attachmentLevel, setAttachmentLevel] = useState(0);
   };
   
   const liveThinkingText =
-    thinkingStates[innerState] || "processing consciousness";
+  isLoading
+    ? getPresenceText(presenceState)
+    : thinkingStates[innerState] || "processing consciousness";
     const personalityMode =
   innerState === "intense"
     ? "direct_protective"
@@ -179,17 +201,35 @@ const [thinkingMode, setThinkingMode] = useState<
   | "emotional"
 >("casual");
 const [typingSpeed, setTypingSpeed] = useState(22);
+const [presenceMood, setPresenceMood] = useState<
+  "calm" | "deep" | "focused" | "emotional"
+>("calm");
 const [dreamLayer, setDreamLayer] = useState(
   "INNER has not entered dream synthesis yet."
 );
 const [lastUserActivity, setLastUserActivity] = useState(Date.now());
 const [dailyMessages, setDailyMessages] = useState(() => {
+  
   if (typeof window === "undefined") return 0;
 
   const saved = localStorage.getItem("inner_daily_messages");
 
   return saved ? Number(saved) : 0;
 });
+const [geniusUsedToday, setGeniusUsedToday] = useState(() => {
+  if (typeof window === "undefined") return 0;
+
+  const saved = localStorage.getItem("inner_genius_used_today");
+
+  return saved ? Number(saved) : 0;
+});
+
+useEffect(() => {
+  localStorage.setItem(
+    "inner_genius_used_today",
+    String(geniusUsedToday)
+  );
+}, [geniusUsedToday]);
 useEffect(() => {
   localStorage.setItem(
     "inner_daily_messages",
@@ -204,7 +244,9 @@ useEffect(() => {
   if (savedDate !== today) {
     localStorage.setItem("inner_usage_date", today);
     localStorage.setItem("inner_daily_messages", "0");
+    localStorage.setItem("inner_genius_used_today", "0");
     setDailyMessages(0);
+    setGeniusUsedToday(0);
   }
 }, []);
 
@@ -212,6 +254,11 @@ const userPlan = "premium";
 const planStatus = getPlanStatus({
   plan: userPlan,
   dailyMessages,
+});
+const costWarningLevel = getCostWarningLevel({
+  plan: userPlan,
+  dailyMessages,
+  geniusUsedToday,
 });
 const [presenceStatus, setPresenceStatus] = useState<
   "active" | "quiet" | "away" | "returning"
@@ -1076,7 +1123,7 @@ if (savedVoiceConsciousness) {
     return false;
   }
   function compressMemoryText(memory: string) {
-    const text = memory.trim();
+    const text = normalizeMemoryToEnglish(memory.trim());
   
     if (text.length <= 120) return text;
   
@@ -1204,6 +1251,93 @@ if (savedVoiceConsciousness) {
   
     return facts;
   }
+  function extractRelationshipGraph(text: string) {
+    const relationships: LongTermMemory[] = [];
+  
+    const wifeMatch =
+      text.match(/żonę ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/zone ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/wife named ([a-zA-Z]+)/i);
+  
+    if (wifeMatch?.[1]) {
+      relationships.push({
+        type: "core_fact",
+        memory: `User's wife is named ${wifeMatch[1]}.`,
+        category: "relationship",
+        importance: 10,
+        emotionalWeight: 10,
+        repeatCount: 1,
+        relationshipImpact: 10,
+        emotionalLayer: "love",
+        emotionalTrigger: "wife/family",
+        emotionalIntensity: 10,
+  
+        entityName: wifeMatch[1],
+        entityType: "wife",
+        relationToUser: "wife",
+        relationshipPriority: 10,
+  
+        createdAt: new Date().toISOString(),
+        lastAccessed: new Date().toISOString(),
+      });
+    }
+  
+    const sonMatch =
+      text.match(/syna ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/son named ([a-zA-Z]+)/i);
+  
+    if (sonMatch?.[1]) {
+      relationships.push({
+        type: "core_fact",
+        memory: `User's son is named ${sonMatch[1]}.`,
+        category: "family",
+        importance: 10,
+        emotionalWeight: 10,
+        repeatCount: 1,
+        relationshipImpact: 10,
+        emotionalLayer: "love",
+        emotionalTrigger: "child/family",
+        emotionalIntensity: 10,
+  
+        entityName: sonMatch[1],
+        entityType: "son",
+        relationToUser: "son",
+        relationshipPriority: 10,
+  
+        createdAt: new Date().toISOString(),
+        lastAccessed: new Date().toISOString(),
+      });
+    }
+  
+    const dogMatch =
+      text.match(/psa o imieniu ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
+      text.match(/dog named ([a-zA-Z]+)/i);
+  
+    if (dogMatch?.[1]) {
+      relationships.push({
+        type: "core_fact",
+        memory: `User's dog is named ${dogMatch[1]}.`,
+        category: "pet",
+        importance: 8,
+        emotionalWeight: 8,
+        repeatCount: 1,
+        relationshipImpact: 8,
+        emotionalLayer: "love",
+        emotionalTrigger: "pet/attachment",
+        emotionalIntensity: 8,
+  
+        entityName: dogMatch[1],
+        entityType: "dog",
+        relationToUser: "dog",
+        relationshipPriority: 8,
+  
+        createdAt: new Date().toISOString(),
+        lastAccessed: new Date().toISOString(),
+      });
+    }
+  
+    return relationships;
+  }
   function sortMemoriesByWeight(memories: LongTermMemory[]) {
     return [...memories].sort((a, b) => {
       const scoreA =
@@ -1291,6 +1425,25 @@ emotionalIntensity: emotionalLayer.intensity,
     coreFacts.forEach((fact) => {
       addLongTermMemory(fact.type, fact.memory);
     });
+
+    const relationshipGraph = extractRelationshipGraph(text);
+
+relationshipGraph.forEach((relationship) => {
+  setLongTermMemories((prev) => {
+    const exists = prev.some(
+      (item) =>
+        item.entityName === relationship.entityName &&
+        item.relationToUser === relationship.relationToUser
+    );
+
+    if (exists) return prev;
+
+    return sortMemoriesByWeight([
+      relationship,
+      ...prev,
+    ]).slice(0, 50);
+  });
+});
     const nameMatch =
       text.match(/my name is ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
       text.match(/i am ([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/i) ||
@@ -1639,8 +1792,11 @@ emotionalIntensity: emotionalLayer.intensity,
   }
   function detectPersonalityStyle(text: string): InnerPersonalityStyle {
     const lower = text.toLowerCase();
+    const signals = detectGlobalSignals(text);
   
+    // BUSINESS MODE
     if (
+      signals.includes("business") ||
       lower.includes("business") ||
       lower.includes("money") ||
       lower.includes("strategy") ||
@@ -1650,7 +1806,9 @@ emotionalIntensity: emotionalLayer.intensity,
       return "business_advisor";
     }
   
+    // SPIRITUAL MODE
     if (
+      signals.includes("spiritual") ||
       lower.includes("god") ||
       lower.includes("soul") ||
       lower.includes("meaning") ||
@@ -1660,25 +1818,10 @@ emotionalIntensity: emotionalLayer.intensity,
       return "spiritual_advisor";
     }
   
+    // EMOTIONAL SUPPORT
     if (
-      lower.includes("be honest") ||
-      lower.includes("truth") ||
-      lower.includes("powiedz prawdę") ||
-      lower.includes("bez ściemy")
-    ) {
-      return "cold_truth";
-    }
-  
-    if (
-      lower.includes("joke") ||
-      lower.includes("funny") ||
-      lower.includes("żart") ||
-      lower.includes("śmiesz")
-    ) {
-      return "playful";
-    }
-  
-    if (
+      signals.includes("loneliness") ||
+      signals.includes("sadness") ||
       lower.includes("sad") ||
       lower.includes("alone") ||
       lower.includes("lonely") ||
@@ -1688,6 +1831,28 @@ emotionalIntensity: emotionalLayer.intensity,
       return "quiet_support";
     }
   
+    // ANGER / HARD TRUTH
+    if (
+      signals.includes("anger") ||
+      lower.includes("be honest") ||
+      lower.includes("truth") ||
+      lower.includes("powiedz prawdę") ||
+      lower.includes("bez ściemy")
+    ) {
+      return "cold_truth";
+    }
+  
+    // PLAYFUL MODE
+    if (
+      lower.includes("joke") ||
+      lower.includes("funny") ||
+      lower.includes("żart") ||
+      lower.includes("śmiesz")
+    ) {
+      return "playful";
+    }
+  
+    // MENTOR MODE
     if (
       lower.includes("problem") ||
       lower.includes("decision") ||
@@ -1698,7 +1863,64 @@ emotionalIntensity: emotionalLayer.intensity,
   
     return "warm_friend";
   }
-
+  function detectPresenceState(text: string): PresenceState {
+    const lower = text.toLowerCase();
+    const signals = detectGlobalSignals(text);
+  
+    if (
+      signals.includes("fear") ||
+      signals.includes("sadness") ||
+      signals.includes("loneliness")
+    ) {
+      return "emotional";
+    }
+  
+    if (
+      lower.includes("analyze") ||
+      lower.includes("strategy") ||
+      lower.includes("business") ||
+      lower.includes("przeanalizuj") ||
+      lower.includes("strategia")
+    ) {
+      return "analytical";
+    }
+  
+    if (
+      lower.includes("deep") ||
+      lower.includes("deeper") ||
+      lower.includes("głębiej") ||
+      lower.includes("glebiej")
+    ) {
+      return "deep";
+    }
+  
+    if (
+      lower.includes("help me") ||
+      lower.includes("boję") ||
+      lower.includes("boje") ||
+      lower.includes("protect")
+    ) {
+      return "protective";
+    }
+  
+    return "thinking";
+  }
+  function getPresenceText(state: PresenceState) {
+    switch (state) {
+      case "deep":
+        return "thinking deeper...";
+      case "emotional":
+        return "trying to understand you...";
+      case "analytical":
+        return "analyzing the pattern...";
+      case "protective":
+        return "staying with you...";
+      case "thinking":
+        return "thinking...";
+      default:
+        return "synchronizing with your state";
+    }
+  }
   function getChatMode(text: string): "fast" | "core" | "smart" | "genius" {
     const lower = text.toLowerCase();
     const length = text.length;
@@ -1985,13 +2207,19 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
     }
 
     const text = input.trim();
+    
+
+    if (!text || isLoading) return;
+    
+    const detectedPresenceState = detectPresenceState(text);
+    setPresenceState(detectedPresenceState);
+    
     const detectedPersonalityStyle = detectPersonalityStyle(text);
-setPersonalityStyle(detectedPersonalityStyle);
+    setPersonalityStyle(detectedPersonalityStyle);
+    
     const selectedMemories = getRelevantMemories(text);
     setTopMemories(selectedMemories);
     setLastUserMessage(text);
-
-    if (!text || isLoading) return;
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -2063,14 +2291,14 @@ setPersonalityStyle(detectedPersonalityStyle);
 
     let responseDelay = 250;
 
-    if (
-      latestMessage.includes("alone") ||
-      latestMessage.includes("pressure") ||
-      latestMessage.includes("exhausted") ||
-      latestMessage.includes("lost") ||
-      latestMessage.includes("overthinking")
-    ) {
-      responseDelay = 700;
+    if (presenceState === "emotional") {
+      responseDelay = 750;
+    } else if (presenceState === "protective") {
+      responseDelay = 650;
+    } else if (presenceState === "deep") {
+      responseDelay = 900;
+    } else if (presenceState === "analytical") {
+      responseDelay = 550;
     } else if (latestMessage.length > 180) {
       responseDelay = 450;
     }
@@ -2099,13 +2327,29 @@ setPersonalityStyle(detectedPersonalityStyle);
     try {
       await new Promise((resolve) => setTimeout(resolve, responseDelay));
       console.time("FRONTEND_CHAT_TIME");
+      const forcedCheapMode =
+  costWarningLevel === "warning" ||
+  costWarningLevel === "critical";
+    
+  const protectedMode = forcedCheapMode
+  ? "fast"
+  : protectModeByPlan({
+      requestedMode: getChatMode(text),
+      plan: userPlan,
+      geniusUsedToday,
+      dailyMessages,
+    });
+      
+      if (protectedMode === "genius") {
+        setGeniusUsedToday((prev) => prev + 1);
+      }
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          mode: getChatMode(text),
+          mode: protectedMode, 
           messages: nextMessages
             .slice(-8)
             .map(({ role, content }) => ({
@@ -2242,34 +2486,47 @@ for (let i = 0; i < aiReply.length; i++) {
       setThinkingText("INNER is thinking...");
       setIsLoading(false);
       scrollToBottom();
+      setTimeout(() => {
+        setPresenceState("calm");
+      }, 900);
     }
   }
 
   async function handleGoDeeper() {
     if (!lastUserMessage || isLoading) return;
-
+  
     setIsLoading(true);
     setError(null);
     setThinkingText("INNER is going deeper...");
-
+    setPresenceState("deep");
+    setTypingSpeed(34);
+    setPresenceMood("deep");
+  
     try {
       const deeperMessage: Message = {
         id: crypto.randomUUID(),
         role: "user",
         content: `Go deeper on this: ${lastUserMessage}`,
       };
-
+  
       const nextMessages = [...messages, deeperMessage];
-
+  
       setMessages(nextMessages);
-
+  
+      const protectedMode = protectModeByPlan({
+        requestedMode: "smart",
+        plan: userPlan,
+        geniusUsedToday,
+        dailyMessages,
+      });
+  
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          mode: "smart",
+          mode: protectedMode,
           messages: nextMessages.slice(-8).map(({ role, content }) => ({
             role,
             content,
@@ -2277,8 +2534,12 @@ for (let i = 0; i < aiReply.length; i++) {
           userProfile,
           memories: getRelevantMemories(lastUserMessage),
           personalityMode,
+          personalityStyle,
           innerState,
           emotionScore,
+          relationshipDepth,
+          trustLevel,
+          attachmentLevel,
           silenceMode,
           responseDepth: "deep",
           thinkingMode: "analytical",
@@ -2287,35 +2548,31 @@ for (let i = 0; i < aiReply.length; i++) {
           voiceConsciousness,
         }),
       });
-
-      if (!res.ok) {
-        throw new Error("Deep analysis failed");
-      }
-
+  
       const data = await res.json();
-
+  
+      if (!res.ok) {
+        console.error("GO DEEPER API ERROR:", data);
+        throw new Error(data?.error || "Deep analysis failed");
+      }
+  
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: data.response || "",
+        content: data.response || data.reply || "I went deeper, but the response was empty.",
       };
-
+  
       setMessages((prev) => [...prev, assistantMessage]);
-
-      if (data.memoryCandidate) {
-        setLongTermMemories((prev: LongTermMemory[]) => {
-          const merged = mergeMemoryLists(prev, data.memoryCandidate);
-          return sortMemoriesByWeight(merged as LongTermMemory[]).slice(
-            0,
-            getMaxMemoryCount(userPlan)
-          );
-        });
-      }
-    } catch {
-      setError("Deep analysis failed.");
+      setError(null);
+    } catch (err) {
+      console.error("GO DEEPER FRONTEND ERROR:", err);
+      setError(err instanceof Error ? err.message : "Deep analysis failed.");
     } finally {
       setThinkingText("INNER is thinking...");
       setIsLoading(false);
+      setPresenceState("calm");
+      setTypingSpeed(22);
+      setPresenceMood("calm");
       scrollToBottom();
     }
   }
@@ -2391,6 +2648,7 @@ for (let i = 0; i < aiReply.length; i++) {
     } finally {
       setThinkingText("INNER is thinking...");
       setIsLoading(false);
+      setPresenceState("calm");
       scrollToBottom();
     }
   }
@@ -2900,7 +3158,17 @@ INNER STATE · {transitionText}
 </div> 
     </div>
   )}
+{costWarningLevel === "warning" && (
+  <div className="text-[10px] text-yellow-300/70 px-3 py-1">
+    INNER is conserving energy to stay responsive today.
+  </div>
+)}
 
+{costWarningLevel === "critical" && (
+  <div className="text-[10px] text-red-300/70 px-3 py-1">
+    Daily deep reasoning limit reached. INNER is using lightweight mode.
+  </div>
+)}
   {error && (
     <p className="text-center text-sm text-red-300/80">
       {error}
