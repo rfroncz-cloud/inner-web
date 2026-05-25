@@ -2594,7 +2594,10 @@ for (let i = 0; i < aiReply.length; i++) {
       const nextMessages = [...messages, deepMessage];
 
       setMessages(nextMessages);
-
+      console.log("FRONTEND ABOUT TO CALL /api/chat", {
+        text,
+        protectedMode,
+      });
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -3178,62 +3181,76 @@ INNER STATE · {transitionText}
 
         <form
           onSubmit={handleSubmit}
-          className="shrink-0 px-6 pb-6 pt-3 bg-gradient-to-t from-black/70 to-transparent"
+          className="shrink-0 px-5 pb-5 pt-3 bg-gradient-to-t from-black/75 to-transparent"
         >
-          <div className="flex items-center gap-3 rounded-[2rem] border border-white/10 bg-white/[0.055] px-4 py-3 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
-            <div className="relative w-10 h-10 rounded-full border border-violet-300/20 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full bg-violet-400/20 blur-xl animate-pulse" />
-              <div
-  className={`
-    relative w-2.5 h-2.5 rounded-full transition-all duration-700
-    ${
-      innerState === "calm"
-        ? "bg-blue-300/80 shadow-[0_0_14px_rgba(147,197,253,0.9)]"
-        : innerState === "focused"
-        ? "bg-emerald-300/80 shadow-[0_0_14px_rgba(110,231,183,0.9)]"
-        : innerState === "reflective"
-        ? "bg-violet-300/80 shadow-[0_0_14px_rgba(196,181,253,0.9)]"
-        : innerState === "intense"
-        ? "bg-red-300/80 shadow-[0_0_14px_rgba(252,165,165,0.9)]"
-        : innerState === "silent"
-        ? "bg-white/50 shadow-[0_0_14px_rgba(255,255,255,0.45)]"
-        : "bg-violet-300/80 shadow-[0_0_14px_rgba(196,181,253,0.9)]"
-    }
-  `}
-/>
+          <div className="flex flex-col gap-3 rounded-[2rem] border border-white/10 bg-white/[0.055] p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+            <div className="flex items-start gap-3">
+              <div className="relative mt-1 w-10 h-10 shrink-0 rounded-full border border-violet-300/20 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full bg-violet-400/20 blur-xl animate-pulse" />
+                <div
+                  className={`
+                    relative w-2.5 h-2.5 rounded-full transition-all duration-700
+                    ${
+                      innerState === "calm"
+                        ? "bg-blue-300/80 shadow-[0_0_14px_rgba(147,197,253,0.9)]"
+                        : innerState === "focused"
+                        ? "bg-emerald-300/80 shadow-[0_0_14px_rgba(110,231,183,0.9)]"
+                        : innerState === "reflective"
+                        ? "bg-violet-300/80 shadow-[0_0_14px_rgba(196,181,253,0.9)]"
+                        : innerState === "intense"
+                        ? "bg-red-300/80 shadow-[0_0_14px_rgba(252,165,165,0.9)]"
+                        : innerState === "silent"
+                        ? "bg-white/50 shadow-[0_0_14px_rgba(255,255,255,0.45)]"
+                        : "bg-violet-300/80 shadow-[0_0_14px_rgba(196,181,253,0.9)]"
+                    }
+                  `}
+                />
+              </div>
+
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    handleSubmit(event as unknown as FormEvent<HTMLFormElement>);
+                  }
+                }}
+                placeholder="Say what you actually feel..."
+                rows={2}
+                className="min-h-[58px] max-h-[130px] w-full resize-none bg-transparent text-[15px] leading-relaxed text-white/90 outline-none placeholder:text-white/25"
+              />
             </div>
 
-            <input
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Say what you actually feel..."
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-white/90 outline-none placeholder:text-white/25"
-            />
-<button
-  type="button"
-  onClick={handleGoDeeper}
-  disabled={isLoading || !lastUserMessage}
-  className="rounded-full bg-violet-500/[0.14] px-4 py-2 text-sm text-violet-100/70 transition hover:bg-violet-500/[0.22] disabled:opacity-30"
->
-  Go deeper
-</button>
-<button
-  type="button"
-  onClick={handleDeepAnalysis}
-  disabled={isLoading || !lastUserMessage}
-  className="rounded-full bg-white/[0.06] px-4 py-2 text-sm text-white/55 transition hover:bg-white/[0.12] disabled:opacity-30"
->
-  Deep
-</button>
-<button
-          type="submit"
-          disabled={isLoading || !input.trim()}
-          className="rounded-full bg-white/[0.08] px-4 py-2 text-sm text-white/55 transition hover:bg-white/[0.12] hover:text-white disabled:opacity-30 disabled:hover:bg-white/[0.08] disabled:hover:text-white/55"
-        >
-          Send
-        </button>
-      </div>
-    </form>
+            <div className="flex justify-end gap-2 pl-[52px]">
+              <button
+                type="button"
+                onClick={handleGoDeeper}
+                disabled={isLoading || !lastUserMessage}
+                className="rounded-full bg-violet-500/[0.18] px-4 py-2 text-sm text-violet-100/75 transition hover:bg-violet-500/[0.28] disabled:opacity-30"
+              >
+                Go deeper
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeepAnalysis}
+                disabled={isLoading || !lastUserMessage}
+                className="rounded-full bg-white/[0.07] px-4 py-2 text-sm text-white/60 transition hover:bg-white/[0.13] disabled:opacity-30"
+              >
+                Deep
+              </button>
+
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                className="rounded-full bg-white/[0.1] px-5 py-2 text-sm text-white/70 transition hover:bg-white/[0.16] hover:text-white disabled:opacity-30 disabled:hover:bg-white/[0.1] disabled:hover:text-white/70"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </form>
   </div>
 </main>
 );

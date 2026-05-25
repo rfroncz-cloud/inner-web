@@ -11,8 +11,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content:
-        "Hi. I’m INNER. What has been on your mind lately?",
+      content: "Hi. I’m INNER. What has been on your mind lately?",
     },
   ]);
 
@@ -91,7 +90,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="h-[650px] overflow-y-auto p-6 space-y-6">
+        <div className="h-[610px] overflow-y-auto p-6 space-y-6">
           {messages.map((message, index) => (
             <div
               key={index}
@@ -124,25 +123,44 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div className="absolute bottom-0 inset-x-0 p-6 border-t border-white/5 bg-black/30 backdrop-blur-xl">
-          <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3">
-            <input
+        <div className="absolute bottom-0 inset-x-0 p-5 border-t border-white/5 bg-black/40 backdrop-blur-xl">
+          <div className="flex flex-col gap-3 rounded-[2rem] border border-white/10 bg-white/[0.04] p-4">
+            <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") sendMessage();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
               }}
               placeholder="Talk to INNER..."
-              className="flex-1 bg-transparent outline-none text-white placeholder:text-white/25"
+              className="w-full min-h-[70px] max-h-[140px] resize-none bg-transparent outline-none text-white placeholder:text-white/25 leading-relaxed"
             />
 
-            <button
-              onClick={sendMessage}
-              disabled={loading}
-              className="px-5 py-2 rounded-full bg-white text-black text-sm font-medium disabled:opacity-40"
-            >
-              Send
-            </button>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-4 py-2 rounded-full bg-violet-500/25 text-white text-sm"
+              >
+                Go deeper
+              </button>
+
+              <button
+                type="button"
+                className="px-4 py-2 rounded-full bg-white/10 text-white text-sm"
+              >
+                Deep
+              </button>
+
+              <button
+                onClick={sendMessage}
+                disabled={loading || !input.trim()}
+                className="px-5 py-2 rounded-full bg-white text-black text-sm font-medium disabled:opacity-40"
+              >
+                Send
+              </button>
+            </div>
           </div>
         </div>
       </div>

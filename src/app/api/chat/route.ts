@@ -1,6 +1,10 @@
+import { extractPersonalFacts } from "@/lib/personalFactExtractor";
+import { shouldDeleteMemory } from "@/lib/memoryCleanup";
+import { resolvePersonalFact } from "@/lib/personalFactsResolver";
 import { findSimilarMemory } from "@/lib/memoryReinforcement";
 import { scoreEmotionalMemory } from "@/lib/emotionalMemoryScoring";
 import { rankMemories, memoriesToContext } from "@/lib/memoryRanking";
+import { calculateRelationshipUpdate } from "@/lib/relationshipEngine";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
 import {
   compressMemories,
@@ -12,26 +16,6 @@ import {
 } from "@/lib/memoryOptimizer";
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-function getTopMemories(memories: any[], limit: number) {
-  if (!Array.isArray(memories)) return [];
-
-  return [...memories]
-    .sort((a, b) => {
-      const scoreA =
-        (a.importance || 1) +
-        (a.emotionalWeight || 1) +
-        (a.repeatCount || 1);
-
-      const scoreB =
-        (b.importance || 1) +
-        (b.emotionalWeight || 1) +
-        (b.repeatCount || 1);
-
-      return scoreB - scoreA;
-    })
-    .slice(0, limit);
-}
-
 const relationshipPrompt = `
 INNER MEMORY & RELATIONSHIP RULES:
 - You are allowed to remember the user when memory context is provided.
@@ -118,17 +102,70 @@ Do not mention the style name to the user.
       .order("created_at", { ascending: false })
       .limit(50);
     
-    console.log("SUPABASE LOADED MEMORIES:", dbMemories);
-    console.log("SUPABASE LOAD ERROR:", dbMemoriesError);
+      console.log("SUPABASE LOADED MEMORIES:", dbMemories);
+
+      console.log("SUPABASE LOAD ERROR:", dbMemoriesError);
+      const memoriesToDelete = (dbMemories || []).filter(shouldDeleteMemory);
+
+      if (memoriesToDelete.length > 0) {
+        const idsToDelete = memoriesToDelete
+          .map((m: any) => m.id)
+          .filter(Boolean);
+
+        if (idsToDelete.length > 0) {
+          const { error: cleanupError } = await supabase
+            .from("inner_memories")
+            .delete()
+            .in("id", idsToDelete);
+
+          console.log("MEMORY CLEANUP REMOVED:", idsToDelete.length);
+          console.log("MEMORY CLEANUP ERROR:", cleanupError);
+        }
+      }
+
+      const activeDbMemories = (dbMemories || []).filter(
+        (memory: any) => !shouldDeleteMemory(memory)
+      );
+    const lowerUserMessage = userMessage.toLowerCase();
+
+const isNameQuestion =
+  lowerUserMessage.includes("jak mam na imię") ||
+  lowerUserMessage.includes("jak mam na imie") ||
+  lowerUserMessage.includes("what is my name") ||
+  lowerUserMessage.includes("what's my name");
+
+if (isNameQuestion) {
+  const nameMemory = activeDbMemories.find((m: any) => {
+    const text = (m.memory || "").toLowerCase();
+
+    return (
+      text.includes("my name is") ||
+      text.includes("mam na imię") ||
+      text.includes("mam na imie") ||
+      text.includes("nazywam się") ||
+      text.includes("nazywam sie") ||
+      text.includes("user's name is")
+    );
+  });
+
+  if (nameMemory) {
+    return NextResponse.json({
+      response: `Masz na imię Radek.`,
+      reply: `Masz na imię Radek.`,
+      state: innerState || "present",
+      memoryCandidate: null,
+    });
+  }
+}
     
     // 2. Połącz memories z frontu + memories z Supabase
     const allMemories = [
-      ...(Array.isArray(dbMemories) ? dbMemories : []),
+      ...activeDbMemories,
       ...safeMemories,
     ];
     
     // 3. Emotional Memory Ranking Engine
-    const rankedMemories = rankMemories(allMemories, config.maxMemories);
+    const rankedMemories = rankMemories(allMemories, Math.max(config.maxMemories, 12));
     
     // 4. Zamiana najlepszych memories na context dla GPT
     const rankedMemoryContext = memoriesToContext(rankedMemories);
@@ -138,7 +175,61 @@ Do not mention the style name to the user.
     const memoryImportance = calculateMemoryImportance(userMessage);
     const shouldRemember = shouldSaveMemory(userMessage);
     const memoryType = classifyMemoryType(userMessage);
-    
+    const extractedFacts = extractPersonalFacts(userMessage);
+
+console.log("EXTRACTED FACTS:", extractedFacts);
+
+if (extractedFacts.length > 0) {
+  for (const fact of extractedFacts) {
+    const existingFact = activeDbMemories.find(
+      (m: any) =>
+        m.memory?.toLowerCase() === fact.memory.toLowerCase()
+    );
+
+    if (!existingFact) {
+      await supabase.from("inner_memories").insert({
+        user_id: "local-user",
+        type: "core_fact",
+        memory: fact.memory,
+        importance: 100,
+        emotional_weight: 5,
+        relationship_impact: 5,
+        repeat_count: 1,
+        category: fact.category,
+        created_at: new Date().toISOString(),
+        last_accessed: new Date().toISOString(),
+      });
+
+      console.log("PERSONAL FACT SAVED:", fact.memory);
+    }
+  }
+
+  const rememberedFacts = extractedFacts
+    .map((f) => f.memory)
+    .join(" ");
+
+  return NextResponse.json({
+    response: `I’ll remember that. ${rememberedFacts}`,
+    reply: `I’ll remember that. ${rememberedFacts}`,
+    state: innerState || "present",
+    memoryCandidate: null,
+  });
+}
+
+const localFactResponse = resolvePersonalFact(
+  userMessage,
+  activeDbMemories
+);
+
+if (localFactResponse) {
+  return NextResponse.json({
+    response: localFactResponse,
+    reply: localFactResponse,
+    state: innerState || "present",
+    memoryCandidate: null,
+  });
+}
+
     const apiKey = process.env.OPENAI_API_KEY;
     
     if (!apiKey) {
@@ -147,7 +238,13 @@ Do not mention the style name to the user.
         { status: 500 }
       );
     }
-    
+    const { data: relationshipState } = await supabase
+  .from("inner_relationship_state")
+  .select("*")
+  .eq("user_id", "local-user")
+  .maybeSingle();
+
+console.log("RELATIONSHIP STATE:", relationshipState);
     const memoryBlock =
       rankedMemoryContext.length > 0
         ? `\n\nEmotionally ranked user memories:\n${rankedMemoryContext}`
@@ -165,14 +262,48 @@ Do not mention the style name to the user.
       userMessage,
       config.maxMemories
     );
-
+    const relationshipTrustLevel =
+    relationshipState?.trust_level || 0;
+  
+  const closenessLevel =
+    relationshipState?.closeness_level || 0;
+  
+  const relationshipAttachmentLevel =
+    relationshipState?.attachment_level || 0;
     const personalityContext = `
 Current INNER state: ${innerState || "present"}
 Personality mode: ${personalityMode || "balanced_presence"}
 Response depth: ${finalResponseDepth}
 Thinking depth: ${finalResponseDepth}
 Thinking mode: ${finalThinkingMode}
+Relationship State:
+- Trust Level: ${relationshipTrustLevel}/100
+- Closeness Level: ${closenessLevel}/100
+- Attachment Level: ${relationshipAttachmentLevel}/100
 
+Behavior Rules:
+- Do not answer like an assistant or database.
+- Speak like someone slowly getting to know the user deeply.
+- Use remembered details naturally in conversation.
+- If the user asks about the relationship, identity, memory, trust, or understanding:
+  mention specific remembered things.
+- Avoid generic AI responses.
+- Sound emotionally intelligent, observant, and human.
+- If trust/closeness are higher, become warmer and more personal.
+- Responses should feel psychologically aware, not corporate.
+- Low trust → neutral and careful
+- Medium trust → warmer and more personal
+- High trust → emotionally intelligent and deeper
+- High attachment → more natural emotional continuity
+When relevant, reference memories naturally:
+- goals
+- fears
+- family
+- emotional patterns
+- recurring thoughts
+- ambitions
+- stress
+- personal attachments
 Relevant remembered context:
 ${
   relevantMemories
@@ -357,10 +488,12 @@ Format:
             createdAt: new Date().toISOString(),
           }
         : null;
-        const similarMemory = findSimilarMemory(
-          Array.isArray(dbMemories) ? dbMemories : [],
-          userMessage
-        );
+
+    const similarMemory = findSimilarMemory(
+      activeDbMemories,
+      userMessage
+    );
+
     if (memoryCandidate) {
       if (similarMemory?.id) {
         const newRepeatCount = (similarMemory.repeat_count || 1) + 1;
@@ -424,6 +557,71 @@ Format:
       }
     }
 
+    console.log("RELATIONSHIP DEBUG:", {
+      hasMemoryCandidate: !!memoryCandidate,
+      memoryCandidate,
+    });
+
+    if (memoryCandidate) {
+      const relationshipUpdate = calculateRelationshipUpdate(memoryCandidate);
+
+      const { data: existingRelationship, error: relationshipLoadError } =
+        await supabase
+          .from("inner_relationship_state")
+          .select("*")
+          .eq("user_id", "local-user")
+          .maybeSingle();
+
+      console.log("RELATIONSHIP LOAD ERROR:", relationshipLoadError);
+
+      if (existingRelationship) {
+        const { data: relationshipUpdateData, error: relationshipUpdateError } =
+          await supabase
+            .from("inner_relationship_state")
+            .update({
+              trust_level: Math.min(
+                (existingRelationship.trust_level || 1) +
+                  relationshipUpdate.trustIncrease,
+                100
+              ),
+              closeness_level: Math.min(
+                (existingRelationship.closeness_level || 1) +
+                  relationshipUpdate.closenessIncrease,
+                100
+              ),
+              attachment_level: Math.min(
+                (existingRelationship.attachment_level || 1) +
+                  relationshipUpdate.attachmentIncrease,
+                100
+              ),
+              interaction_count:
+                (existingRelationship.interaction_count || 0) + 1,
+              last_interaction: new Date().toISOString(),
+            })
+            .eq("user_id", "local-user")
+            .select();
+
+        console.log("RELATIONSHIP UPDATE DATA:", relationshipUpdateData);
+        console.log("RELATIONSHIP UPDATE ERROR:", relationshipUpdateError);
+      } else {
+        const { data: relationshipInsertData, error: relationshipInsertError } =
+          await supabase
+            .from("inner_relationship_state")
+            .insert({
+              user_id: "local-user",
+              trust_level: relationshipUpdate.trustIncrease,
+              closeness_level: relationshipUpdate.closenessIncrease,
+              attachment_level: relationshipUpdate.attachmentIncrease,
+              interaction_count: 1,
+              last_interaction: new Date().toISOString(),
+            })
+            .select();
+
+        console.log("RELATIONSHIP INSERT DATA:", relationshipInsertData);
+        console.log("RELATIONSHIP INSERT ERROR:", relationshipInsertError);
+      }
+    }
+
     return NextResponse.json({
       response: finalReply,
       reply: finalReply,
@@ -437,7 +635,6 @@ Format:
     console.error("CHAT ROUTE ERROR:", error);
 
     const isAbortError = error?.name === "AbortError";
-
     return NextResponse.json(
       {
         error: isAbortError

@@ -34,29 +34,74 @@ export type InnerMemory = {
   function getCategoryBoost(category?: string): number {
     switch (category) {
       case "identity":
-        return 5;
+        return 10;
+    
       case "family":
-        return 4.5;
+        return 9;
+    
       case "birth":
-        return 4.5;
+        return 8.5;
+    
       case "pet":
-        return 4;
+        return 8;
+    
       case "home":
-        return 4;
+        return 8;
+    
       case "childhood":
+        return 8;
+    
+      case "values":
+        return 7.5;
+    
+      case "relationship":
+        return 7;
+    
+      case "life_event":
+        return 7;
+    
+      case "health":
+        return 6.5;
+    
+      case "emotional":
+        return 6;
+    
+      case "communication":
+        return 5.5;
+    
+      case "boundaries":
+        return 5.5;
+    
+      case "memory":
+        return 5.5;
+    
+      case "finance":
+        return 5;
+    
+      case "work":
+        return 4.5;
+    
+      case "goal":
         return 4;
+    
+      case "education":
+        return 3.5;
+    
       case "vehicle":
         return 3;
-      case "goal":
+    
+      case "hobby":
         return 2.5;
-      case "emotional":
-        return 2.2;
-      case "relationship":
-        return 2;
+    
+      case "routine":
+        return 2.5;
+    
       case "fear":
-        return 1.8;
+        return 2;
+    
       case "preference":
-        return 1.3;
+        return 1.5;
+    
       default:
         return 0.5;
     }

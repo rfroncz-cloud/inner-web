@@ -72,7 +72,24 @@ export type InnerMemory = {
   
   export function shouldSaveMemory(message: string): boolean {
     const text = message.toLowerCase().trim();
-  
+    if (
+      text.includes("http://") ||
+      text.includes("https://") ||
+      text.includes("localhost:")
+    ) {
+      return false;
+    }
+    if (text.length > 500) {
+      return false;
+    }
+    if (
+      text.includes("function") ||
+      text.includes("const ") ||
+      text.includes("import ") ||
+      text.includes("export ")
+    ) {
+      return false;
+    }
     if (!text || text.length < 20) return false;
 
     const personalSignals = [
