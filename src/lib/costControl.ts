@@ -59,3 +59,26 @@ export function getCostWarningLevel({
   
     return "normal";
   }
+  export function getResponseLimitInstruction(mode: string, emotionMode?: string) {
+    if (mode === "fast") {
+      if (emotionMode === "supportive") {
+        return "Reply in 2-4 short sentences. Be warm but concise.";
+      }
+  
+      if (emotionMode === "direct") {
+        return "Reply in 1-3 short sentences. Be direct and practical.";
+      }
+  
+      return "Reply in 1-3 short sentences. No long explanations.";
+    }
+  
+    if (mode === "smart") {
+      return "Reply naturally in 3-6 sentences. Give useful depth without over-explaining.";
+    }
+  
+    if (mode === "genius") {
+      return "Give a deeper answer only if the user clearly needs it. Stay structured and avoid unnecessary length.";
+    }
+  
+    return "Reply concisely.";
+  }

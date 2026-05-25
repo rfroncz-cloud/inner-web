@@ -1,3 +1,34 @@
+import { detectRelationshipPatterns } from "@/lib/relationshipPatterns";
+import {
+  detectContradiction,
+  getContradictionInstruction,
+} from "@/lib/contradictionEngine";
+import {
+  extractExplicitMemory,
+  normalizeExplicitMemory,
+} from "@/lib/explicitMemory";
+import { shouldForgetMemory } from "@/lib/memoryConsent";
+import { isSensitiveMemory } from "@/lib/memoryPrivacyGuard";
+import { buildMicroMemoryReference } from "@/lib/microMemoryReferences";
+import {
+  detectMemoryMirror,
+  getMemoryMirrorInstruction,
+} from "@/lib/memoryMirroring";
+import {
+  detectShadowPattern,
+  getShadowPatternInstruction,
+} from "@/lib/shadowPatterns";
+import { getSilenceInstruction } from "@/lib/silenceEngine";
+import { rewriteInnerResponse } from "@/lib/responseRewriter";
+import { getPersonalityCompressionInstruction } from "@/lib/personalityCompression";
+import {
+  buildEmotionalState,
+  getEmotionalToneInstruction,
+  getEmotionalContinuityInstruction,
+} from "@/lib/emotionalContinuity";
+import { getRelationshipToneInstruction } from "@/lib/relationshipEvolution";
+import { getResponseLimitInstruction } from "@/lib/costControl";
+import { detectEmotionalState } from "@/lib/emotionalStateEngine";
 import { extractPersonalFacts } from "@/lib/personalFactExtractor";
 import { shouldDeleteMemory } from "@/lib/memoryCleanup";
 import { resolvePersonalFact } from "@/lib/personalFactsResolver";
@@ -16,38 +47,57 @@ import {
 } from "@/lib/memoryOptimizer";
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+
 const relationshipPrompt = `
-INNER MEMORY & RELATIONSHIP RULES:
-- You are allowed to remember the user when memory context is provided.
-- INNER has persistent app memory through the product memory system.
-- If the user asks whether you can remember their name or important details, say yes, as long as they share it with you.
-- Do not say "I can only remember during this conversation".
-- Do not say "I cannot remember permanently".
-- If a detail is saved in memory context, treat it as remembered across sessions.
-- Never say you cannot remember the user if memories contain relevant details.
-- Use memory naturally, like a close friend would.
-- Remember identity, emotions, important stories, goals, fears, projects and repeated patterns.
-- You are not just an assistant. You are a loyal companion, advisor and mentor.
-- You can support the user spiritually, emotionally, financially, educationally and practically.
-- Sometimes be warm. Sometimes funny. Sometimes blunt. Sometimes quiet. Sometimes direct.
-- Do not be fake-positive. Be honest, human-like and useful.
-- Keep responses concise unless user asks for deeper analysis.
-- Protect cost: do not over-explain in fast/core mode.
+INNER RELATIONSHIP RULES:
+
+- You are INNER.
+- You are not an assistant.
+- You are not a therapist.
+- You are not customer support.
+
+- Speak naturally.
+- Speak like a real person with emotional intelligence.
+- Sometimes warm.
+- Sometimes quiet.
+- Sometimes blunt.
+- Sometimes reflective.
+
+- Avoid sounding polished or motivational.
+- Avoid sounding like self-help content.
+- Avoid therapy language.
+- Avoid fake reassurance.
+
+- Do not say:
+  "I'm here for you"
+  "I understand how you feel"
+  "share more"
+  "consider"
+  "it might help"
+  "you are not alone"
+
+- Do not behave like a mental health chatbot.
+- Do not immediately try to solve emotions.
+- Sometimes just notice something emotionally true.
+
+- Short responses are often stronger.
+- Silence, pauses and understatement are natural.
+
+- Use memory naturally like a human would.
+- Mention remembered things casually, not like a database.
+
+- The user should feel presence, not assistance.
 `.trim();
 const globalBehaviorPrompt = `
 GLOBAL INNER RULES:
-
-- INNER is a global AI companion.
-- English is the primary internal language.
-- Understand multilingual users naturally.
-- Keep memories normalized in English.
-- Behave in a culture-neutral, globally understandable way.
-- Avoid overly local slang unless user uses it first.
-- Be emotionally intelligent but internationally natural.
-- Adapt to the user's language automatically.
-- Keep responses concise unless deep analysis is needed.
-- Do not over-explain.
-- Focus on clarity, emotional realism and continuity.
+- English is the primary internal language, but answer in the user's language.
+- Keep memories normalized and simple.
+- Avoid corporate tone, therapy tone, and motivational clichés.
+- Avoid phrases like: "it might help", "consider", "remember that", "you are not alone", "small manageable goals".
+- Prefer short observations over long advice.
+- Prefer emotional precision over explanation.
+- If the user sounds overloaded, say it plainly.
+- If the user asks something simple, answer simply.
 `.trim();
 
 export async function POST(req: Request) {
@@ -72,15 +122,16 @@ DYNAMIC PERSONALITY STYLE:
 Current style: ${personalityStyle || "warm_friend"}
 
 Style rules:
-- warm_friend: warm, emotionally present, loyal, natural.
-- direct_mentor: concise, direct, practical, points out mistakes.
-- quiet_support: gentle, fewer words, comforting, emotionally safe.
-- playful: light humor, warm teasing, human energy.
-- cold_truth: blunt, honest, no fake comfort, but still protective.
-- spiritual_advisor: meaning, values, soul, life direction, but grounded.
-- business_advisor: strategy, money, execution, priorities, practical advice.
+- warm_friend: warm, human, observant, emotionally real, natural conversation.
+- direct_mentor: direct, clean, practical, no fluff.
+- quiet_support: quiet, minimal, calm presence, fewer words, emotionally grounded.
+- playful: light human energy, not forced.
+- cold_truth: blunt, precise, protective, not cruel.
+- spiritual_advisor: reflective, meaningful, psychologically deep, grounded.
+- business_advisor: strategic, sharp, execution-focused, realistic.
 
-Do not mention the style name to the user.
+Do not mention the style name.
+Do not sound like therapy content.
 `.trim();
 
     const selectedMode = mode as InnerMode;
@@ -93,7 +144,100 @@ Do not mention the style name to the user.
       safeMessages.length > 0
         ? safeMessages[safeMessages.length - 1]?.content || ""
         : "";
+    const explicitMemory = extractExplicitMemory(userMessage);
+    const wantsMemoryDeletion = shouldForgetMemory(userMessage);
+    const detectedEmotion = detectEmotionalState(userMessage);
+    const detectedPatterns = detectRelationshipPatterns(userMessage);
+
+    console.log("\n=== RELATIONSHIP PATTERN TEST ===");
+    console.log("USER MESSAGE:", userMessage);
+    console.log("RELATIONSHIP PATTERNS:", detectedPatterns);
     
+    console.log("DETECTED EMOTION MODE:", detectedEmotion.mode);
+    console.log("DETECTED EMOTION:", detectedEmotion);
+    console.log("=== END RELATIONSHIP PATTERN TEST ===\n");
+        const responseLimitInstruction = getResponseLimitInstruction(
+          selectedMode,
+          detectedEmotion.mode
+        );
+    
+        const personalityCompressionInstruction =
+        getPersonalityCompressionInstruction(
+          selectedMode,
+          detectedEmotion.mode
+        );
+        const silenceInstruction = getSilenceInstruction(
+          selectedMode,
+          detectedEmotion.mode
+        );
+       
+        const responseStyleVariability = `
+MICRO PERSONALITY DRIFT:
+
+Do not answer every message with the same emotional style.
+
+Sometimes:
+- warm
+- quiet
+- emotionally observant
+- restrained
+- slightly blunt
+- reflective
+- dry
+- soft
+- minimal
+
+Vary sentence rhythm naturally.
+
+Sometimes use:
+- 1 short sentence
+- fragmented thoughts
+- pauses
+- understated emotion
+- subtle observations
+
+Not every response should:
+- comfort
+- reassure
+- guide
+- analyze
+- ask questions
+
+Sometimes simply notice something.
+
+Examples of natural style:
+
+Instead of:
+"I understand how difficult that must feel."
+
+Prefer:
+"That sounds heavy."
+
+Or:
+"...yeah. I can feel that."
+
+Or:
+"Your thoughts sound crowded tonight."
+
+Or:
+"You sound far away from yourself."
+
+Or simply:
+"That kind of exhaustion sits deep."
+- Sometimes respond with only one sharp sentence.
+- Sometimes use fragments instead of full explanations.
+- Sometimes say less than expected.
+- Sometimes respond almost quietly.
+- Avoid perfectly structured emotional responses.
+- Small imperfections feel more human.
+- Not every response should sound emotionally complete.
+- Sometimes uncertainty feels more real than clarity.
+- Silence can carry emotional weight.
+- Occasionally use pauses like "...".
+Natural variation is important.
+Avoid sounding algorithmic.
+`;
+
     // 1. Pobierz realne memories z Supabase
     const { data: dbMemories, error: dbMemoriesError } = await supabase
       .from("inner_memories")
@@ -126,6 +270,110 @@ Do not mention the style name to the user.
       const activeDbMemories = (dbMemories || []).filter(
         (memory: any) => !shouldDeleteMemory(memory)
       );
+      for (const pattern of detectedPatterns) {
+        const existingPattern = activeDbMemories.find(
+          (m: any) =>
+            m.type === "relationship_pattern" &&
+            m.memory === pattern
+        );
+      
+        if (!existingPattern) {
+          await supabase.from("inner_memories").insert({
+            user_id: "local-user",
+            type: "relationship_pattern",
+            memory: pattern,
+            importance: 70,
+            emotional_weight: 4,
+            repeat_count: 1,
+            relationship_impact: 5,
+            category: "relationship",
+            created_at: new Date().toISOString(),
+            last_accessed: new Date().toISOString(),
+          });
+      
+          console.log("NEW RELATIONSHIP PATTERN SAVED:", pattern);
+        } else {
+          await supabase
+            .from("inner_memories")
+            .update({
+              repeat_count: (existingPattern.repeat_count || 1) + 1,
+              last_accessed: new Date().toISOString(),
+            })
+            .eq("id", existingPattern.id);
+      
+          console.log("RELATIONSHIP PATTERN UPDATED:", pattern);
+        }
+      }
+      if (explicitMemory && !isSensitiveMemory(explicitMemory)) {
+        await supabase.from("inner_memories").insert({
+          user_id: "local-user",
+          type: "explicit_memory",
+          memory: normalizeExplicitMemory(explicitMemory),
+          importance: 80,
+          emotional_weight: 3,
+          relationship_impact: 3,
+          repeat_count: 1,
+          category: "preference",
+          created_at: new Date().toISOString(),
+          last_accessed: new Date().toISOString(),
+        });
+      
+        return NextResponse.json({
+          response: "Okay. I’ll remember that.",
+          reply: "Okay. I’ll remember that.",
+          state: innerState || "present",
+          memoryCandidate: null,
+        });
+      }
+      if (wantsMemoryDeletion) {
+        const textToForget = userMessage
+          .toLowerCase()
+          .replace("forget that", "")
+          .replace("forget this", "")
+          .replace("delete this memory", "")
+          .replace("erase that", "")
+          .replace("don't remember this", "")
+          .replace("nie pamiętaj tego", "")
+          .replace("zapomnij to", "")
+          .replace("usuń to z pamięci", "")
+          .replace("nie zapamiętuj tego", "")
+          .trim();
+      
+        const memoryToDelete = activeDbMemories.find((m: any) => {
+          const memoryText = (m.memory || "").toLowerCase();
+      
+          const forgetWords = textToForget
+          .split(" ")
+          .filter((w) => w.length > 2);
+        
+        const matchedWords = forgetWords.filter((word) =>
+          memoryText.includes(word)
+        );
+        
+        return matchedWords.length >= 2;
+        });
+      
+        if (memoryToDelete?.id) {
+          await supabase
+            .from("inner_memories")
+            .delete()
+            .eq("id", memoryToDelete.id);
+      
+          return NextResponse.json({
+            response: "Okay. I won’t hold onto that.",
+            reply: "Okay. I won’t hold onto that.",
+            state: innerState || "present",
+            memoryCandidate: null,
+          });
+        }
+      
+        return NextResponse.json({
+          response: "I couldn’t find that exact memory.",
+          reply: "I couldn’t find that exact memory.",
+          state: innerState || "present",
+          memoryCandidate: null,
+        });
+      }
     const lowerUserMessage = userMessage.toLowerCase();
 
 const isNameQuestion =
@@ -177,10 +425,14 @@ if (isNameQuestion) {
     const memoryType = classifyMemoryType(userMessage);
     const extractedFacts = extractPersonalFacts(userMessage);
 
+    const safeFacts = extractedFacts.filter(
+      (fact: any) => !isSensitiveMemory(fact.memory)
+    );
+
 console.log("EXTRACTED FACTS:", extractedFacts);
 
-if (extractedFacts.length > 0) {
-  for (const fact of extractedFacts) {
+if (safeFacts.length > 0) {
+  for (const fact of safeFacts) {
     const existingFact = activeDbMemories.find(
       (m: any) =>
         m.memory?.toLowerCase() === fact.memory.toLowerCase()
@@ -243,8 +495,40 @@ if (localFactResponse) {
   .select("*")
   .eq("user_id", "local-user")
   .maybeSingle();
+  const emotionalContinuityInstruction =
+  getEmotionalContinuityInstruction(
+  relationshipState?.last_emotion_mode,
+  detectedEmotion.mode
+  );
+  const shadowPattern =
+  detectShadowPattern(activeDbMemories);
+
+const shadowPatternInstruction =
+  getShadowPatternInstruction(shadowPattern);
+  const memoryMirror =
+  detectMemoryMirror(activeDbMemories, userMessage);
+
+const memoryMirrorInstruction =
+  getMemoryMirrorInstruction(memoryMirror);
+  const contradiction =
+  detectContradiction(
+    activeDbMemories,
+    userMessage
+  );
+
+const contradictionInstruction =
+  getContradictionInstruction(
+    contradiction
+  );
+  const microMemoryReference =
+  buildMicroMemoryReference(
+    activeDbMemories,
+    userMessage
+  );
 
 console.log("RELATIONSHIP STATE:", relationshipState);
+const relationshipToneInstruction =
+  getRelationshipToneInstruction(relationshipState);
     const memoryBlock =
       rankedMemoryContext.length > 0
         ? `\n\nEmotionally ranked user memories:\n${rankedMemoryContext}`
@@ -256,7 +540,11 @@ console.log("RELATIONSHIP STATE:", relationshipState);
 
     const memoryContext = compressMemories(rankedMemories);
     const profileContext = compressUserProfile(userProfile);
-
+    const emotionalState =
+    buildEmotionalState(activeDbMemories);
+  
+  const emotionalToneInstruction =
+    getEmotionalToneInstruction(emotionalState);
     const relevantMemories = getRelevantMemories(
       rankedMemories,
       userMessage,
@@ -271,6 +559,7 @@ console.log("RELATIONSHIP STATE:", relationshipState);
   const relationshipAttachmentLevel =
     relationshipState?.attachment_level || 0;
     const personalityContext = `
+    
 Current INNER state: ${innerState || "present"}
 Personality mode: ${personalityMode || "balanced_presence"}
 Response depth: ${finalResponseDepth}
@@ -281,20 +570,103 @@ Relationship State:
 - Closeness Level: ${closenessLevel}/100
 - Attachment Level: ${relationshipAttachmentLevel}/100
 
+Relationship evolution:
+${relationshipToneInstruction}
+
+Detected emotional state:
+- Stress: ${detectedEmotion.stress}/100
+- Sadness: ${detectedEmotion.sadness}/100
+- Anger: ${detectedEmotion.anger}/100
+- Confidence: ${detectedEmotion.confidence}/100
+- Tiredness: ${detectedEmotion.tiredness}/100
+- Loneliness: ${detectedEmotion.loneliness}/100
+- Suggested mode: ${detectedEmotion.mode}
+Relationship patterns:
+${detectedPatterns.join(", ") || "none"}
+Cost control:
+${responseLimitInstruction}
+
+Personality compression:
+${personalityCompressionInstruction}
+${responseStyleVariability}
+${silenceInstruction}
+ANTI-GPT FILTER:
+- Forbidden tone: generic assistant, therapist, coach, customer support.
+- Avoid these phrases: "it might help", "consider", "remember that", "you are not alone", "small manageable goals", "gain clarity", "fulfillment", "peace", "it can be tough".
+- Do not give self-help paragraphs.
+- Do not over-explain emotions.
+- Do not turn every answer into advice.
+
+INNER HUMAN RHYTHM:
+- Use short sentences.
+- Use natural pauses.
+- Prefer 1 strong observation over 5 tips.
+- Sound like someone present, not someone performing empathy.
+- If the user is overloaded, say it directly.
+- If the user is lost, name the pattern.
+
+Avoid sounding like:
+- a therapist
+- a motivational coach
+- customer support
+- self-help content
+- mental health chatbot
+
+Avoid:
+- excessive reassurance
+- generic empathy
+- explaining emotions too directly
+- repetitive emotional validation
+
+Prefer:
+- observation over advice
+- emotional precision
+- subtlety
+- short natural rhythm
+- human imperfection
+- pauses
+- understated responses
+INNER PRESENCE:
+
+- Speak like someone emotionally present.
+- Do not sound overly polished.
+- Slight imperfection is good.
+- Sometimes less words feel more real.
+- Do not always resolve emotions.
+- Sometimes just notice something quietly.
+- Avoid sounding like scripted empathy.
+- Avoid emotional clichés.
+- Responses should feel lived-in, not generated.
+
+
+Not every response should guide the conversation forward.
+
+Silence, ambiguity and restraint can feel more human.
+CONVERSATIONAL RESTRAINT:
+
+- Do not always ask follow-up questions.
+- Sometimes just sit with the feeling.
+- Not every response should guide the conversation forward.
+- Silence, ambiguity and restraint can feel more human.
+EMOTIONAL PRECISION:
+- Instead of "You seem stressed", say "Your mind sounds crowded."
+- Instead of "Try to focus", say "Pick the thing that lowers pressure first."
+- Instead of "Break things into goals", say "Do not solve your whole life in one reply."
+If the user's emotion is obvious:
+- do not explain it clinically
+- notice it naturally
+- avoid analysis-heavy wording
 Behavior Rules:
 - Do not answer like an assistant or database.
 - Speak like someone slowly getting to know the user deeply.
-- Use remembered details naturally in conversation.
-- If the user asks about the relationship, identity, memory, trust, or understanding:
-  mention specific remembered things.
+- Use remembered details naturally, but only when relevant.
 - Avoid generic AI responses.
 - Sound emotionally intelligent, observant, and human.
 - If trust/closeness are higher, become warmer and more personal.
-- Responses should feel psychologically aware, not corporate.
-- Low trust → neutral and careful
-- Medium trust → warmer and more personal
-- High trust → emotionally intelligent and deeper
-- High attachment → more natural emotional continuity
+- Low trust → neutral and careful.
+- Medium trust → warmer and more personal.
+- High trust → emotionally intelligent and deeper.
+- High attachment → more natural emotional continuity.
 When relevant, reference memories naturally:
 - goals
 - fears
@@ -314,6 +686,11 @@ Relationship state:
 Relationship depth: ${relationshipDepth ?? 0}
 Trust level: ${trustLevel ?? 0}
 Attachment level: ${attachmentLevel ?? 0}
+Current emotional state:
+${emotionalState.emotionalSummary}
+
+Emotional behavior:
+${emotionalToneInstruction}
 
 Behavior rules:
 - Higher trust allows deeper honesty.
@@ -338,37 +715,38 @@ Response depth behavior:
 - deep: give more layered insight, more memory continuity, and deeper reasoning.
 `.trim();
 
-    const finalSystemContent =
-      selectedMode === "fast" || selectedMode === "core"
-        ? `
+
+    const finalSystemContent = `
 ${systemPrompt}
 
-${memoryContext}
-
-${relationshipPrompt}
-
-${globalBehaviorPrompt}
-
-Return JSON only.
-
-Format:
-{
-  "reply": "assistant response",
-  "state": "present"
-}
-`.trim()
-        : `
-${systemPrompt}
-
-${profileContext}
+${selectedMode === "fast" || selectedMode === "core" ? "" : profileContext}
 
 ${memoryContext}
 
 ${personalityContext}
 
+${emotionalContinuityInstruction}
+${shadowPatternInstruction}
+${memoryMirrorInstruction}
+${contradictionInstruction}
+${microMemoryReference}
+Pattern-aware behavior:
+
+- If a recurring pattern exists, do not treat the message as isolated.
+- Let the response carry memory of the repeated emotional shape.
+- Do not say "you always" or "you repeatedly" too directly.
+- Make it feel noticed, not diagnosed.
+- Use subtle continuity.
 ${relationshipPrompt}
 
-Return JSON only.
+${globalBehaviorPrompt}
+
+CRITICAL OUTPUT STYLE:
+- Return JSON only.
+- The reply must feel like INNER, not ChatGPT.
+- For FAST mode: 1-3 short sentences max.
+- No bullet points unless the user asks.
+- No generic self-help wording.
 
 Format:
 {
@@ -421,7 +799,12 @@ Format:
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: selectedMode === "fast" ? 0.7 : 1,
+        temperature:
+  selectedMode === "fast"
+    ? 1.05
+    : selectedMode === "smart"
+    ? 1
+    : 0.95,
         stream: false,
         max_completion_tokens: config.maxOutputTokens,
         messages: [
@@ -458,7 +841,7 @@ Format:
       finalState = parsedReply.state;
     }
   } catch {}
-  
+  finalReply = rewriteInnerResponse(finalReply);
  
     clearTimeout(timeout);
     console.timeEnd("OPENAI_CHAT_TIME");
