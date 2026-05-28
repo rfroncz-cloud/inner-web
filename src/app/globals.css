@@ -24,3 +24,34 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* --- Voice Mode orb animations (UI foundation) --------------------------- */
+@keyframes voice-breathe-slow {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
+@keyframes voice-pulse-medium {
+  0%, 100% { transform: scale(1.04); opacity: 0.9; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+@keyframes voice-drift-active {
+  0%, 100% { transform: scale(1.02) translateY(0); opacity: 0.9; }
+  33% { transform: scale(1.06) translateY(-2px); opacity: 1; }
+  66% { transform: scale(1.04) translateY(2px); opacity: 0.95; }
+}
+@keyframes voice-pulse-strong {
+  0%, 100% { transform: scale(1.06); opacity: 0.92; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+.voice-orb-slow { animation: voice-breathe-slow 5s ease-in-out infinite; }
+.voice-orb-medium { animation: voice-pulse-medium 2.4s ease-in-out infinite; }
+.voice-orb-active { animation: voice-drift-active 3s ease-in-out infinite; }
+.voice-orb-strong { animation: voice-pulse-strong 1.3s ease-in-out infinite; }
+
+/* --- Onboarding step transition ----------------------------------------- */
+@keyframes inner-onboard-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.inner-onboard-fade { animation: inner-onboard-fade 0.5s ease; }

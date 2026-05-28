@@ -1,21 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { MemoryPanel } from "./MemoryPanel";
 import { MemoryTimeline } from "./MemoryTimeline";
+import { LifeEventsPanel } from "./LifeEventsPanel";
+import { DevDashboard } from "./DevDashboard";
+import { UserProfileReflection } from "./UserProfileReflection";
+import { buildUserProfile, getProfileSummary } from "@/lib/userProfileEngine";
+
+const IS_DEV = process.env.NODE_ENV === "development";
 
 // ---------------------------------------------------------------------------
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type Tab = "memory" | "timeline" | "reflection" | "patterns";
+type Tab = "memory" | "timeline" | "life" | "reflection" | "patterns" | "dev";
 
-const TABS: { id: Tab; label: string }[] = [
+const BASE_TABS: { id: Tab; label: string }[] = [
   { id: "memory", label: "Memory" },
   { id: "timeline", label: "Timeline" },
+  { id: "life", label: "Life" },
   { id: "reflection", label: "Reflection" },
   { id: "patterns", label: "Patterns" },
 ];
+
+const DEV_TAB: { id: Tab; label: string } = { id: "dev", label: "Dev" };
+
+const TABS = IS_DEV ? [...BASE_TABS, DEV_TAB] : BASE_TABS;
 
 // ---------------------------------------------------------------------------
 // Props
@@ -47,6 +58,17 @@ type InnerViewProps = {
   lastUserMessage?: string | null;
   loading?: boolean;
   onClearAll?: () => void;
+  // Dev dashboard runtime values — only used when NODE_ENV === "development".
+  devProps?: {
+    messagesCount?: number;
+    relationshipStage?: string;
+    conversationMode?: string;
+    innerPresence?: string;
+    costMode?: string;
+    costMaxTokens?: number;
+    costMaxMemoryLines?: number;
+    model?: string;
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -61,7 +83,8 @@ function TabBar({
   onChange: (t: Tab) => void;
 }) {
   return (
-    <div className="flex gap-0 mb-8 border-b border-white/[0.06]">
+    /* Horizontal scroll on narrow screens so all tabs are reachable */
+    <div className="flex mb-6 border-b border-white/[0.06] overflow-x-auto scrollbar-none -mx-1 px-1">
       {TABS.map((t) => {
         const isActive = t.id === active;
         return (
@@ -69,13 +92,11 @@ function TabBar({
             key={t.id}
             type="button"
             onClick={() => onChange(t.id)}
+            /* min-h-[44px] ensures a comfortable tap target on mobile */
             className={`
-              relative pb-3 px-4 text-[10px] uppercase tracking-[0.24em] transition-colors
-              ${
-                isActive
-                  ? "text-violet-200/90"
-                  : "text-white/30 hover:text-white/55"
-              }
+              relative shrink-0 min-h-[44px] flex items-end pb-3 px-4
+              text-[10px] uppercase tracking-[0.24em] transition-colors whitespace-nowrap
+              ${isActive ? "text-violet-200/90" : "text-white/30 hover:text-white/55"}
             `}
           >
             {t.label}
@@ -98,9 +119,26 @@ export function InnerView({
   lastUserMessage,
   loading = false,
   onClearAll,
+  devProps,
 }: InnerViewProps) {
   // Tab state is always initialised to "memory" — avoids any SSR mismatch.
   const [activeTab, setActiveTab] = useState<Tab>("memory");
+
+  // Life events count for the dev dashboard (derived client-side, lazy).
+  // Avoid importing lifeEvents here — it's already handled inside LifeEventsPanel.
+  // Approximate by counting category-tagged memories for the dashboard.
+  const lifeEventsCount = memories.filter(
+    (m) =>
+      m.category === "birthday" ||
+      m.category === "family" ||
+      m.type === "life_goal" ||
+      m.type === "life_context"
+  ).length;
+
+  // User Profile Engine v1 — evolving, soft understanding of the user.
+  // Pure local computation from existing memories; no AI calls.
+  const userProfile = useMemo(() => buildUserProfile(memories), [memories]);
+  const profileSummary = useMemo(() => getProfileSummary(userProfile), [userProfile]);
 
   return (
     <div className="flex flex-col min-h-0">
@@ -125,13 +163,20 @@ export function InnerView({
           />
         )}
 
+        {activeTab === "life" && (
+          <LifeEventsPanel memories={memories} loading={loading} />
+        )}
+
         {activeTab === "reflection" && (
-          <MemoryPanel
-            loading={loading}
-            memories={memories}
-            lastUserMessage={lastUserMessage}
-            focus="all"
-          />
+          <div className="space-y-6">
+            <UserProfileReflection profile={userProfile} summary={profileSummary} />
+            <MemoryPanel
+              loading={loading}
+              memories={memories}
+              lastUserMessage={lastUserMessage}
+              focus="all"
+            />
+          </div>
         )}
 
         {activeTab === "patterns" && (
@@ -140,6 +185,23 @@ export function InnerView({
             memories={memories}
             lastUserMessage={lastUserMessage}
             focus="patterns"
+          />
+        )}
+
+        {IS_DEV && activeTab === "dev" && (
+          <DevDashboard
+            memoriesCount={memories.length}
+            messagesCount={devProps?.messagesCount}
+            relationshipStage={devProps?.relationshipStage}
+            conversationMode={devProps?.conversationMode}
+            innerPresence={devProps?.innerPresence}
+            lifeEventsCount={lifeEventsCount}
+            costMode={devProps?.costMode}
+            costMaxTokens={devProps?.costMaxTokens}
+            costMaxMemoryLines={devProps?.costMaxMemoryLines}
+            model={devProps?.model}
+            profileConfidence={userProfile.profileConfidence}
+            profileSummary={profileSummary}
           />
         )}
       </div>

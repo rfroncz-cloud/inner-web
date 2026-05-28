@@ -11,13 +11,27 @@ import { mergeMemoryLists } from "@/lib/memoryOptimizer";
 import { SideDrawer } from "./SideDrawer";
 import { InsightsPanelContent } from "./InsightsPanelContent";
 import { InnerView } from "./InnerView";
+import { VoiceMode } from "./VoiceMode";
+import { DevDashboard } from "./DevDashboard";
+import { OnboardingFlow, type OnboardingProfile } from "./OnboardingFlow";
+import { buildUserProfile, getProfileSummary } from "@/lib/userProfileEngine";
 import {
   generateTypingProfile,
   TYPING_MS_PER_CHAR,
 } from "@/lib/typingRealism";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import {
+  derivePresenceState,
+  getPresenceSubtitle,
+  type PresenceState as InnerPresenceState,
+} from "@/lib/presenceEngine";
+import {
+  getRelationshipStageUILabel,
+  type RelationshipStage as DepthRelationshipStage,
+} from "@/lib/relationshipDepthEngine";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type ActivePanel = "innerview" | "insights" | null;
+type ActivePanel = "innerview" | "insights" | "voice" | "dev" | null;
+const IS_DEV = process.env.NODE_ENV === "development";
 import {
   canSendMessage,
   getMaxMemoryCount,
@@ -133,6 +147,17 @@ const [trustLevel, setTrustLevel] = useState(0);
 const [attachmentLevel, setAttachmentLevel] = useState(0);
 const [presenceState, setPresenceState] =
   useState<PresenceState>("calm");
+// Presence Engine v1 — quiet "between messages" presence shown under ONLINE.
+const [innerPresence, setInnerPresence] =
+  useState<InnerPresenceState>("listening");
+// Relationship Depth Engine — subtle stage label (from API, no scores shown).
+const [relationshipDepthStage, setRelationshipDepthStage] =
+  useState<DepthRelationshipStage>("new");
+// Cost Control Layer — dev panel only, never exposed to end users.
+const [devCostMode, setDevCostMode] = useState<string>("cheap");
+const [devCostTokens, setDevCostTokens] = useState<number>(80);
+const [devCostMemoryLines, setDevCostMemoryLines] = useState<number>(2);
+const [devModel, setDevModel] = useState<string>("gpt-4o-mini");
   const [previousState, setPreviousState] = useState(innerState);
   const thinkingStates = {
     calm: "stabilizing emotional patterns",
@@ -335,6 +360,22 @@ const [relationshipStage, setRelationshipStage] = useState<
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [memoriesInitialLoad, setMemoriesInitialLoad] = useState(true);
 
+  // Onboarding v1 — show the "getting to know you" flow before first chat
+  // unless it's already been completed/skipped. Checked client-side only to
+  // stay hydration-safe (server renders nothing, client decides on mount).
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+
+  useEffect(() => {
+    try {
+      const done = localStorage.getItem("inner_onboarding_completed");
+      if (!done) setShowOnboarding(true);
+    } catch {
+      // localStorage unavailable — skip onboarding gracefully.
+    }
+    setOnboardingChecked(true);
+  }, []);
+
   const [memoryInsight, setMemoryInsight] = useState(
     "INNER is observing emotional patterns."
   );
@@ -380,6 +421,18 @@ const [relationshipStage, setRelationshipStage] = useState<
     return saved ? JSON.parse(saved) : [];
     
   });
+
+  // User Profile Engine v1 — evolving understanding, computed locally from
+  // memories. Used by the Dev dashboard. No AI calls.
+  const devUserProfile = useMemo(
+    () => buildUserProfile(longTermMemories),
+    [longTermMemories]
+  );
+  const devProfileSummary = useMemo(
+    () => getProfileSummary(devUserProfile),
+    [devUserProfile]
+  );
+
   useEffect(() => {
     const savedRelationshipDepth =
       localStorage.getItem("inner_relationship_depth");
@@ -1734,6 +1787,81 @@ relationshipGraph.forEach((relationship) => {
     setConsciousness([]);
     setError(null);
   }
+
+  // Onboarding v1 — persist the answers and feed them into the existing memory
+  // flow. New memories are appended to longTermMemories, which auto-syncs to
+  // Supabase via the existing /api/memory/sync effect. No extra AI calls.
+  function finishOnboarding(profile: OnboardingProfile) {
+    try {
+      localStorage.setItem("inner_onboarding_completed", "true");
+      localStorage.setItem("inner_onboarding_profile", JSON.stringify(profile));
+    } catch {
+      // ignore storage failures
+    }
+
+    const now = new Date().toISOString();
+    const supportLabel =
+      profile.supportStyle === "gentle"
+        ? "gentle support"
+        : profile.supportStyle === "direct"
+        ? "direct truth"
+        : profile.supportStyle === "reflective"
+        ? "quiet reflection"
+        : "";
+
+    const onboardingMemories: LongTermMemory[] = [];
+
+    const push = (
+      memory: string,
+      type: string,
+      category: LongTermMemory["category"],
+      importance: number
+    ) => {
+      onboardingMemories.push({
+        type,
+        memory,
+        importance,
+        emotionalWeight: 3,
+        repeatCount: 1,
+        createdAt: now,
+        category,
+      });
+    };
+
+    if (profile.name.trim()) {
+      push(`Name: ${profile.name.trim()}`, "core_fact", "core_fact", 100);
+    }
+    if (profile.focus.trim()) {
+      push(`Currently focused on: ${profile.focus.trim()}`, "life_context", "core_fact", 80);
+    }
+    if (profile.neverForget.trim()) {
+      push(`Never forget: ${profile.neverForget.trim()}`, "core_fact", "core_fact", 95);
+    }
+    if (supportLabel) {
+      push(`Prefers ${supportLabel} when things get hard.`, "preference", "core_fact", 85);
+    }
+    if (profile.matters.trim()) {
+      push(`What matters most now: ${profile.matters.trim()}`, "life_context", "core_fact", 80);
+    }
+
+    if (onboardingMemories.length > 0) {
+      setLongTermMemories((prev) =>
+        [...onboardingMemories, ...prev] as LongTermMemory[]
+      );
+    }
+
+    setShowOnboarding(false);
+  }
+
+  function skipOnboarding() {
+    try {
+      localStorage.setItem("inner_onboarding_completed", "true");
+    } catch {
+      // ignore storage failures
+    }
+    setShowOnboarding(false);
+  }
+
   function simulateInnerState(text: string) {
     const detectedState = detectInnerState(text);
     setInnerState(detectedState);
@@ -2441,6 +2569,26 @@ if (
 
       const aiReply = data.response || "";
 
+      // Presence Engine v1 — update INNER's between-message presence.
+      const nextPresence = derivePresenceState({
+        emotionalIntensity: data.emotionalIntensity ?? 0,
+        conversationMode: data.conversationMode || "direct",
+        relationshipStage: data.relationshipStage,
+        recentUserMessages: [text],
+      });
+      setInnerPresence(nextPresence);
+      console.log("PRESENCE_STATE", nextPresence);
+
+      if (data.relationshipStage) {
+        setRelationshipDepthStage(data.relationshipStage as DepthRelationshipStage);
+      }
+
+      // Cost Control — update dev panel indicators from route response.
+      if (data.costMode)          setDevCostMode(data.costMode);
+      if (data.costMaxTokens)     setDevCostTokens(data.costMaxTokens);
+      if (data.costMaxMemoryLines) setDevCostMemoryLines(data.costMaxMemoryLines);
+      if (data.model)             setDevModel(data.model);
+
       const typingProfile = generateTypingProfile({
         conversationMode: data.conversationMode || "direct",
         emotionalIntensity: data.emotionalIntensity ?? 0,
@@ -2714,6 +2862,10 @@ for (let i = 0; i < aiReply.length; i++) {
     }
   `}
 >
+      {onboardingChecked && showOnboarding && (
+        <OnboardingFlow onComplete={finishOnboarding} onSkip={skipOnboarding} />
+      )}
+
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute top-[-15%] left-[-10%] w-[500px] h-[500px] rounded-full bg-violet-500/10 blur-[140px] animate-pulse" />
         <div className="absolute bottom-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full bg-blue-500/10 blur-[180px] animate-pulse" />
@@ -2839,6 +2991,14 @@ for (let i = 0; i < aiReply.length; i++) {
         </span>
       </div>
 
+      <p className="mt-1.5 text-[10px] text-white/28 tracking-[0.05em]">
+        {getRelationshipStageUILabel(relationshipDepthStage)}
+      </p>
+
+      <p className="mt-1 text-[11px] text-violet-200/40 tracking-[0.04em] transition-opacity duration-500">
+        {getPresenceSubtitle(innerPresence, innerPresence)}
+      </p>
+
       <p className="mt-2 text-sm text-white/40 tracking-[0.03em]">
         emotionally adaptive consciousness
       </p>
@@ -2852,6 +3012,22 @@ for (let i = 0; i < aiReply.length; i++) {
     >
       Inner View
     </button>
+
+    <button
+      onClick={() => setActivePanel("voice")}
+      className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
+    >
+      Voice
+    </button>
+
+    {IS_DEV && (
+      <button
+        onClick={() => setActivePanel("dev")}
+        className="text-[10px] tracking-[0.18em] uppercase text-amber-400/50 hover:text-amber-300/80 transition"
+      >
+        Dev
+      </button>
+    )}
 
     <button
       onClick={clearMemory}
@@ -2995,7 +3171,7 @@ INNER STATE · {transitionText}
 
         <form
           onSubmit={handleSubmit}
-          className="shrink-0 px-5 pb-5 pt-3 bg-gradient-to-t from-black/75 to-transparent"
+          className="shrink-0 px-4 sm:px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-black/75 to-transparent"
         >
           <div className="flex flex-col gap-3 rounded-[2rem] border border-white/10 bg-white/[0.055] p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
             <div className="flex items-start gap-3">
@@ -3041,7 +3217,7 @@ INNER STATE · {transitionText}
                 type="button"
                 onClick={handleGoDeeper}
                 disabled={isLoading || !lastUserMessage}
-                className="rounded-full bg-violet-500/[0.18] px-4 py-2 text-sm text-violet-100/75 transition hover:bg-violet-500/[0.28] disabled:opacity-30"
+                className="rounded-full bg-violet-500/[0.18] px-4 py-2.5 min-h-[36px] text-sm text-violet-100/75 transition hover:bg-violet-500/[0.28] active:scale-95 disabled:opacity-30"
               >
                 Go deeper
               </button>
@@ -3050,7 +3226,7 @@ INNER STATE · {transitionText}
                 type="button"
                 onClick={handleDeepAnalysis}
                 disabled={isLoading || !lastUserMessage}
-                className="rounded-full bg-white/[0.07] px-4 py-2 text-sm text-white/60 transition hover:bg-white/[0.13] disabled:opacity-30"
+                className="rounded-full bg-white/[0.07] px-4 py-2.5 min-h-[36px] text-sm text-white/60 transition hover:bg-white/[0.13] active:scale-95 disabled:opacity-30"
               >
                 Deep
               </button>
@@ -3058,7 +3234,7 @@ INNER STATE · {transitionText}
               <button
                 type="submit"
                 disabled={isLoading || !input.trim()}
-                className="rounded-full bg-white/[0.1] px-5 py-2 text-sm text-white/70 transition hover:bg-white/[0.16] hover:text-white disabled:opacity-30 disabled:hover:bg-white/[0.1] disabled:hover:text-white/70"
+                className="rounded-full bg-white/[0.1] px-5 py-2.5 min-h-[36px] text-sm text-white/70 transition hover:bg-white/[0.16] hover:text-white active:scale-95 disabled:opacity-30 disabled:hover:bg-white/[0.1] disabled:hover:text-white/70"
               >
                 Send
               </button>
@@ -3070,10 +3246,22 @@ INNER STATE · {transitionText}
   <SideDrawer
     open={activePanel !== null}
     onClose={() => setActivePanel(null)}
-    title={activePanel === "insights" ? "Insights" : "Inner View"}
+    title={
+      activePanel === "insights"
+        ? "Insights"
+        : activePanel === "voice"
+        ? "Voice Mode"
+        : activePanel === "dev"
+        ? "Developer Dashboard"
+        : "Inner View"
+    }
     subtitle={
       activePanel === "insights"
         ? "How INNER is reading this moment."
+        : activePanel === "voice"
+        ? "A preview of INNER's presence."
+        : activePanel === "dev"
+        ? "System health · Cost · Release readiness"
         : "What INNER quietly notices about you."
     }
   >
@@ -3098,12 +3286,45 @@ INNER STATE · {transitionText}
         personalityMode={personalityMode}
         selfAwareness={selfAwareness}
       />
+    ) : activePanel === "voice" ? (
+      <VoiceMode
+        presenceSubtitle={getPresenceSubtitle(innerPresence, innerPresence)}
+        relationshipLabel={getRelationshipStageUILabel(relationshipDepthStage)}
+        moodState={innerState}
+      />
+    ) : activePanel === "dev" && IS_DEV ? (
+      <DevDashboard
+        memoriesCount={longTermMemories.length}
+        messagesCount={messages.length}
+        relationshipStage={relationshipDepthStage}
+        conversationMode={undefined}
+        innerPresence={innerPresence}
+        lifeEventsCount={longTermMemories.filter(
+          (m) => m.category === "birthday" || m.category === "family" || m.type === "life_goal"
+        ).length}
+        costMode={devCostMode}
+        costMaxTokens={devCostTokens}
+        costMaxMemoryLines={devCostMemoryLines}
+        model={devModel}
+        profileConfidence={devUserProfile.profileConfidence}
+        profileSummary={devProfileSummary}
+      />
     ) : (
       <InnerView
         memories={longTermMemories}
         lastUserMessage={lastUserMessage}
         loading={memoriesInitialLoad}
         onClearAll={clearMemory}
+        devProps={{
+          messagesCount: messages.length,
+          relationshipStage: relationshipDepthStage,
+          conversationMode: undefined,
+          innerPresence: innerPresence,
+          costMode: devCostMode,
+          costMaxTokens: devCostTokens,
+          costMaxMemoryLines: devCostMemoryLines,
+          model: devModel,
+        }}
       />
     )}
   </SideDrawer>

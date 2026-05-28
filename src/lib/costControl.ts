@@ -1,5 +1,110 @@
 export type UserPlan = "free" | "premium";
 
+// ─── Cost Mode ──────────────────────────────────────────────────────────────
+
+export type CostMode = "cheap" | "balanced" | "premium";
+
+export type CostModeParams = {
+  userTier?: UserPlan;
+  conversationMode?: string;
+  emotionalIntensity?: number;
+  requestedDepth?: string;
+  messageLength?: number;
+  memoryContextLines?: number;
+  wantsWebSearch?: boolean;
+  /** Raw user message text used for keyword-based premium detection. */
+  rawMessage?: string;
+};
+
+const DEEP_ANALYSIS_TRIGGERS = [
+  "analyze", "deep dive", "breakdown", "explain in detail", "help me understand why",
+  "what's really going on", "go deeper", "full analysis", "thorough", "investigate",
+];
+
+const COMPLEX_REASONING_TRIGGERS = [
+  "pros and cons", "compare", "weigh up", "trade-off", "long term", "strategic",
+  "plan", "step by step", "walk me through",
+];
+
+export function determineCostMode(params: CostModeParams = {}): CostMode {
+  const {
+    userTier = "free",
+    conversationMode,
+    emotionalIntensity = 0,
+    requestedDepth,
+    messageLength = 0,
+    wantsWebSearch = false,
+  } = params;
+
+  // Free users always stay cheap.
+  if (userTier === "free") return "cheap";
+
+  // Explicit premium signals: web search requested or deep-analysis depth.
+  if (wantsWebSearch) return "premium";
+  if (requestedDepth === "deep" || requestedDepth === "genius") return "premium";
+
+  const lowerMsg = params.rawMessage ? params.rawMessage.toLowerCase() : "";
+
+  if (DEEP_ANALYSIS_TRIGGERS.some((t) => lowerMsg.includes(t))) return "premium";
+  if (COMPLEX_REASONING_TRIGGERS.some((t) => lowerMsg.includes(t))) return "premium";
+
+  // Supportive / highly emotional context — balanced is enough; no need for premium.
+  if (
+    emotionalIntensity >= 0.7 ||
+    conversationMode === "SUPPORTIVE" ||
+    conversationMode === "REFLECTIVE"
+  ) {
+    return "balanced";
+  }
+
+  // Long messages with depth hint — balanced.
+  if (messageLength > 120 && conversationMode !== "DIRECT") return "balanced";
+
+  // Default for premium users.
+  return "balanced";
+}
+
+// ─── Per-mode caps ───────────────────────────────────────────────────────────
+
+export function getMaxOutputTokensForCostMode(mode: CostMode): number {
+  switch (mode) {
+    case "cheap":    return 80;
+    case "balanced": return 260;
+    case "premium":  return 600;
+  }
+}
+
+export function getMaxMemoryLinesForCostMode(mode: CostMode): number {
+  switch (mode) {
+    case "cheap":    return 2;
+    case "balanced": return 5;
+    case "premium":  return 8;
+  }
+}
+
+export function shouldAllowDeepReasoning(mode: CostMode): boolean {
+  return mode === "premium";
+}
+
+export function shouldAllowWebSearch(mode: CostMode): boolean {
+  return mode === "premium";
+}
+
+// ─── Logging helper ──────────────────────────────────────────────────────────
+
+export function logCostMode(mode: CostMode, params: Pick<CostModeParams, "userTier">) {
+  console.log("COST_MODE", {
+    mode,
+    userTier: params.userTier ?? "free",
+    maxTokens: getMaxOutputTokensForCostMode(mode),
+    maxMemoryLines: getMaxMemoryLinesForCostMode(mode),
+    deepReasoning: shouldAllowDeepReasoning(mode),
+    webSearch: shouldAllowWebSearch(mode),
+  });
+}
+
+
+
 export function getDailyMessageLimit(plan: UserPlan) {
   if (plan === "premium") return 300;
   return 20;

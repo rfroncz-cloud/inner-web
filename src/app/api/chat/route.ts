@@ -28,6 +28,21 @@ import {
 } from "@/lib/shadowPatterns";
 import { getSilenceInstruction } from "@/lib/silenceEngine";
 import { rewriteInnerResponse } from "@/lib/responseRewriter";
+import { polishInnerReply } from "@/lib/personalityPolish";
+import {
+  chooseHumanRealismStyle,
+  applyHumanRealism,
+} from "@/lib/humanRealism";
+import {
+  determineMemoryInfluence,
+  shouldReferenceMemory,
+  shouldReferenceRelationship,
+  enforceMemoryInfluence,
+} from "@/lib/memoryInfluenceBalancer";
+import {
+  calculateRelationshipStage,
+  getRelationshipDepthInstruction,
+} from "@/lib/relationshipDepthEngine";
 import { getPersonalityCompressionInstruction } from "@/lib/personalityCompression";
 import {
   buildEmotionalState,
@@ -35,7 +50,13 @@ import {
   getEmotionalContinuityInstruction,
 } from "@/lib/emotionalContinuity";
 import { getRelationshipToneInstruction } from "@/lib/relationshipEvolution";
-import { getResponseLimitInstruction } from "@/lib/costControl";
+import {
+  getResponseLimitInstruction,
+  determineCostMode,
+  getMaxOutputTokensForCostMode,
+  getMaxMemoryLinesForCostMode,
+  logCostMode,
+} from "@/lib/costControl";
 import { detectEmotionalState } from "@/lib/emotionalStateEngine";
 import { extractPersonalFacts } from "@/lib/personalFactExtractor";
 import { extractStructuredFacts } from "@/lib/factExtraction";
@@ -169,6 +190,34 @@ Do not sound like therapy content.
     console.log("DETECTED EMOTION MODE:", detectedEmotion.mode);
     console.log("DETECTED EMOTION:", detectedEmotion);
     console.log("=== END RELATIONSHIP PATTERN TEST ===\n");
+
+    // Cost Control Layer v1 — determine spending mode for this request.
+    // Free users are always "cheap". Premium users default to "balanced",
+    // escalating to "premium" only when the message signals deep analysis.
+    const costMode = determineCostMode({
+      userTier: "free", // TODO: wire real user tier once auth lands
+      emotionalIntensity: Math.max(
+        detectedEmotion.stress ?? 0,
+        detectedEmotion.sadness ?? 0,
+        detectedEmotion.anger ?? 0,
+        detectedEmotion.tiredness ?? 0,
+        detectedEmotion.loneliness ?? 0
+      ),
+      requestedDepth: responseDepth,
+      messageLength: userMessage.length,
+      wantsWebSearch: false,
+      rawMessage: userMessage,
+    });
+    logCostMode(costMode, { userTier: "free" });
+
+    // Cap config values using cost mode limits (never exceed what mode allows).
+    // We keep `config` read-only and carry effective caps as separate constants.
+    const costMaxTokens = Math.min(
+      config.maxOutputTokens,
+      getMaxOutputTokensForCostMode(costMode)
+    );
+    const costMaxMemoryLines = getMaxMemoryLinesForCostMode(costMode);
+
         const responseLimitInstruction = getResponseLimitInstruction(
           selectedMode,
           detectedEmotion.mode
@@ -510,6 +559,17 @@ if (localFactResponse) {
   .select("*")
   .eq("user_id", "local-user")
   .maybeSingle();
+
+  // Dynamic Relationship Depth v1 — how well INNER knows this person, derived
+  // from existing relationship_state (read-only). Shapes familiarity/tone.
+  const relationshipStage = calculateRelationshipStage({
+    interactionCount: relationshipState?.interaction_count ?? 0,
+    trustLevel: relationshipState?.trust_level ?? 0,
+    closenessLevel: relationshipState?.closeness_level ?? 0,
+  });
+  const relationshipDepthInstruction =
+    getRelationshipDepthInstruction(relationshipStage);
+  console.log("RELATIONSHIP_STAGE", relationshipStage);
   const emotionalContinuityInstruction =
   getEmotionalContinuityInstruction(
   relationshipState?.last_emotion_mode,
@@ -584,7 +644,8 @@ Use this subtly. Do not mention it every time.`
     }))
   );
 
-  const topMemories = getTopMemories(allMemories, 12);
+  // Honour cost mode memory cap: never pass more memories than the tier allows.
+  const topMemories = getTopMemories(allMemories, Math.min(12, costMaxMemoryLines * 2));
 
   // Memory Compression Engine v1 — collapse all memories + the relationship
   // profile into one short, human, prompt-ready block. Pure local logic; no
@@ -592,6 +653,8 @@ Use this subtly. Do not mention it every time.`
   const compressedMemoryContext = compressMemoryContext({
     memories: topMemories,
     relationshipProfile: relationshipPatternProfile,
+    maxFacts: costMaxMemoryLines,
+    maxLines: costMaxMemoryLines,
   });
 
   console.log("COMPRESSED_MEMORY_CONTEXT", compressedMemoryContext);
@@ -629,10 +692,28 @@ Use this subtly. Do not mention it every time.`
   const conversationStyleInstruction =
     getConversationStyleInstruction(conversationMode);
 
+  // Memory Influence Balancer v1 — decide how much memory should surface this
+  // turn so it doesn't dominate. Most turns -> none (memory stays invisible).
+  const memoryInfluence = determineMemoryInfluence({
+    userMessage,
+    emotionalIntensity,
+    relationshipDepth: relationshipDepth ?? 0,
+    conversationMode,
+    currentPatterns: relationshipPatternProfile.signals,
+    currentTensions: relationshipPatternProfile.emotionalTensions,
+  });
+  console.log("MEMORY_INFLUENCE_LEVEL", memoryInfluence);
+
   // Prompt Context Guardrails v1 — gate and clean context before injection.
+  // The influence level decides whether memory / relationship context is even
+  // eligible; guardrails then trim and de-noise whatever is allowed through.
   const guardrails = applyPromptGuardrails({
-    rawMemoryContext: compressedMemoryContext.promptContext,
-    rawRelationshipContext: relationshipPatternContext,
+    rawMemoryContext: shouldReferenceMemory(memoryInfluence)
+      ? compressedMemoryContext.promptContext
+      : "",
+    rawRelationshipContext: shouldReferenceRelationship(memoryInfluence)
+      ? relationshipPatternContext
+      : "",
     userMessage,
     conversationMode,
     reflectionDecision: relationshipReflectionDecision,
@@ -833,6 +914,8 @@ ${guardrails.memoryContext}
 
 ${conversationStyleInstruction}
 
+${relationshipDepthInstruction}
+
 ${personalityContext}
 
 ${emotionalContinuityInstruction}
@@ -868,10 +951,12 @@ Format:
 
     console.log("INNER ROUTING:", {
       mode: selectedMode,
+      costMode,
       model: config.model,
       maxMessages: config.maxMessages,
       maxMemories: config.maxMemories,
-      maxOutputTokens: config.maxOutputTokens,
+      maxOutputTokens: costMaxTokens,
+      maxMemoryLines: costMaxMemoryLines,
     });
 
     console.log("MEMORY IMPORTANCE:", {
@@ -917,7 +1002,7 @@ Format:
     ? 1
     : 0.95,
         stream: false,
-        max_completion_tokens: config.maxOutputTokens,
+        max_completion_tokens: costMaxTokens,
         messages: [
           {
             role: "system",
@@ -934,32 +1019,72 @@ Format:
     });
 
     const data = await response.json();
-    const rawReply =
-    data.choices?.[0]?.message?.content ||
-    "I am here.";
-  
-  let finalReply = rawReply;
-  let finalState = innerState || "present";
-  
-  try {
-    const parsedReply = JSON.parse(rawReply);
-  
-    if (parsedReply?.reply) {
-      finalReply = parsedReply.reply;
-    }
-  
-    if (parsedReply?.state) {
-      finalState = parsedReply.state;
-    }
-  } catch {}
-  finalReply = rewriteInnerResponse({
-    rawResponse: finalReply,
-    conversationMode,
-    emotionalIntensity,
-    recentAssistantMessages,
-    relationshipReflectionDecision,
-  });
-  console.log("REWRITTEN_RESPONSE", finalReply);
+
+    // --- Step 1: extract raw text from AI response --------------------------
+    const rawReply: string =
+      data.choices?.[0]?.message?.content || "I am here.";
+
+    let finalReply = rawReply;
+    let finalState = innerState || "present";
+
+    try {
+      const parsedReply = JSON.parse(rawReply);
+      if (parsedReply?.reply) finalReply = parsedReply.reply;
+      if (parsedReply?.state) finalState = parsedReply.state;
+    } catch {}
+
+    console.log("RAW_RESPONSE", finalReply);
+
+    // --- Step 2: responseRewriter -------------------------------------------
+    const rewritten = rewriteInnerResponse({
+      rawResponse: finalReply,
+      conversationMode,
+      emotionalIntensity,
+      recentAssistantMessages,
+      relationshipReflectionDecision,
+    });
+    finalReply = rewritten || finalReply; // fallback: keep raw if rewriter empties it
+    console.log("REWRITTEN_RESPONSE", finalReply);
+
+    // --- Step 3: personalityPolish ------------------------------------------
+    const polished = polishInnerReply({
+      response: finalReply,
+      conversationMode,
+      emotionalIntensity,
+      relationshipDepth: relationshipDepth ?? 0,
+      recentMessages: recentAssistantMessages,
+      userMessage,
+    });
+    finalReply = polished || finalReply; // fallback: keep rewritten if polish empties it
+    console.log("PERSONALITY_POLISH", finalReply);
+
+    // --- Step 4: humanRealism (subtle natural variation) --------------------
+    const realismStyle = chooseHumanRealismStyle({
+      userMessage,
+      conversationMode,
+      emotionalIntensity,
+      recentAssistantMessages,
+      relationshipDepth: relationshipDepth ?? 0,
+      reflectionDecision: relationshipReflectionDecision,
+    });
+    console.log("HUMAN_REALISM_STYLE", realismStyle);
+
+    const humanized = applyHumanRealism({
+      response: finalReply,
+      style: realismStyle,
+      userMessage,
+      conversationMode,
+      emotionalIntensity,
+      recentAssistantMessages,
+    });
+    finalReply = humanized || finalReply; // fallback: keep polished if it empties
+    console.log("HUMAN_REALISM_FINAL", finalReply);
+
+    // --- Step 5: enforce memory influence -----------------------------------
+    // When influence is "none", strip any sentence that surfaced memory or
+    // patterns so the reply stays focused on the current message.
+    const influenced = enforceMemoryInfluence(finalReply, memoryInfluence);
+    finalReply = influenced || finalReply;
  
     clearTimeout(timeout);
     console.timeEnd("OPENAI_CHAT_TIME");
@@ -1123,6 +1248,7 @@ Format:
       }
     }
 
+    console.log("FINAL_REPLY", finalReply);
     return NextResponse.json({
       response: finalReply,
       reply: finalReply,
@@ -1130,6 +1256,12 @@ Format:
       memoryCandidate,
       conversationMode,
       emotionalIntensity,
+      relationshipStage,
+      // Cost Control — surfaced to dev panel only, never shown to end users.
+      costMode,
+      costMaxTokens,
+      costMaxMemoryLines,
+      model: config.model,
     });
     
   
