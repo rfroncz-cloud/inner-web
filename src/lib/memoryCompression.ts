@@ -1,12 +1,16 @@
 import {
   filterMemoriesForPrompt,
-  memoryQualityScore,
   type MemoryLike,
 } from "@/lib/memoryCleanup";
 import type {
   RelationshipPatternProfile,
   RelationshipPatternType,
 } from "@/lib/relationshipPatterns";
+import {
+  extractStructuredFacts,
+  structuredFactToLine,
+} from "@/lib/factExtraction";
+import { getTopMemories } from "@/lib/memoryImportance";
 
 // ---------------------------------------------------------------------------
 // Memory Compression Engine v1
@@ -116,16 +120,30 @@ export function compressMemoryContext(
     Array.isArray(memories) ? memories : []
   );
 
-  const ranked = [...cleaned].sort(
-    (a, b) => memoryQualityScore(b) - memoryQualityScore(a)
-  );
+  // Rank by learned importance (repetition, emotion, family/pets/goals) and
+  // let stale/trivial memories fade. Falls back gracefully when records have
+  // no timestamps or counts.
+  const ranked = getTopMemories(cleaned);
 
   // Prefer stable facts; backfill with other high-quality memories if needed.
   const factLike = ranked.filter(looksLikeFact);
   const rest = ranked.filter((m) => !looksLikeFact(m));
-  const rememberedFacts = uniqueLines(
-    [...factLike, ...rest].map((m) => (m.memory || "").trim())
-  ).slice(0, Math.max(0, maxFacts));
+
+  // Split any combined memories ("...name is Radek, has dog Rio, 3 cats...")
+  // into clean single-fact lines via the structured extraction engine.
+  const factLines: string[] = [];
+  for (const m of [...factLike, ...rest]) {
+    const text = (m.memory || "").trim();
+    if (!text) continue;
+    const structured = extractStructuredFacts(text);
+    if (structured.length > 0) {
+      for (const f of structured) factLines.push(structuredFactToLine(f));
+    } else {
+      factLines.push(text);
+    }
+  }
+
+  const rememberedFacts = uniqueLines(factLines).slice(0, Math.max(0, maxFacts));
 
   // --- Relationship / emotional context -----------------------------------
   const patternLines: string[] = [];

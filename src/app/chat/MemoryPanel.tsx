@@ -12,6 +12,11 @@ import {
   memoryQualityScore,
   type MemoryLike as CleanupMemoryLike,
 } from "@/lib/memoryCleanup";
+import {
+  extractStructuredFacts,
+  structuredFactToLine,
+} from "@/lib/factExtraction";
+import { getMemoryRank } from "@/lib/memoryImportance";
 
 // Anti-creepy thresholds. Anything below LOW is hidden entirely.
 const HIDE_BELOW = 25;
@@ -329,12 +334,84 @@ export function MemoryPanel({
   }, [mounted, memories, lastUserMessage]);
 
   const remembered = useMemo(() => {
-    return reflectionMemories
+    const sourceFacts = reflectionMemories
       .filter(isLikelyFactMemory)
-      .map((m) => ({ m, conf: memoryQualityScore(m) }))
-      .filter((x) => confidenceLabel(x.conf) !== null)
-      .sort((a, b) => b.conf - a.conf)
-      .slice(0, MAX_REMEMBERED);
+      .map((m) => ({ m, conf: memoryQualityScore(m), rank: getMemoryRank(m) }))
+      .filter((x) => confidenceLabel(x.conf) !== null);
+
+    type RememberedItem = {
+      key: string;
+      text: string;
+      conf: number;
+      sourceKey: string;
+      priority: number;
+      rank: number;
+    };
+
+    // family / pets / location / goals first, then preferences, then other.
+    const factTypePriority = (type?: string): number => {
+      switch (type) {
+        case "name":
+        case "family":
+        case "pet":
+        case "location":
+        case "goal":
+        case "project":
+          return 0;
+        case "preference":
+          return 1;
+        default:
+          return 2;
+      }
+    };
+
+    const items: RememberedItem[] = [];
+    const seen = new Set<string>();
+
+    for (const { m, conf, rank } of sourceFacts) {
+      const text = (m.memory || "").trim();
+      if (!text) continue;
+      const sourceKey = memoryKey(m);
+      const structured = extractStructuredFacts(text);
+
+      if (structured.length > 0) {
+        // Clean, single-fact lines extracted from the memory.
+        for (const f of structured) {
+          const line = structuredFactToLine(f);
+          const dedupeKey = line.toLowerCase();
+          if (!line || seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          items.push({
+            key: `${sourceKey}::${line}`,
+            text: line,
+            conf,
+            sourceKey,
+            priority: factTypePriority(f.type),
+            rank,
+          });
+        }
+      } else {
+        // No structured fact: only keep short, already-clean facts (e.g.
+        // "Dog: Rio"). Raw long / narrative memories are intentionally hidden.
+        if (text.length > 50) continue;
+        const dedupeKey = text.toLowerCase();
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        items.push({
+          key: `${sourceKey}::${text}`,
+          text,
+          conf,
+          sourceKey,
+          priority: 2,
+          rank,
+        });
+      }
+    }
+
+    // Category priority first, then learned importance within each group.
+    items.sort((a, b) => a.priority - b.priority || b.rank - a.rank);
+
+    return items.slice(0, MAX_REMEMBERED);
   }, [reflectionMemories]);
 
   const emotionalSignals = useMemo(() => {
@@ -433,17 +510,14 @@ export function MemoryPanel({
                 </p>
               ) : (
                 <ListShell>
-                  {remembered.map(({ m, conf }) => {
-                    const key = memoryKey(m);
-                    return (
-                      <PlainRow
-                        key={key}
-                        text={m.memory ?? ""}
-                        confidence={conf}
-                        onHide={() => hideMemory(key)}
-                      />
-                    );
-                  })}
+                  {remembered.map((item) => (
+                    <PlainRow
+                      key={item.key}
+                      text={item.text}
+                      confidence={item.conf}
+                      onHide={() => hideMemory(item.sourceKey)}
+                    />
+                  ))}
                 </ListShell>
               )}
             </section>

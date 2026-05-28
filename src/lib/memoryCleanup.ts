@@ -11,6 +11,8 @@ export type MemoryLike = {
   entityName?: string;
   createdAt?: string;
   created_at?: string;
+  lastAccessed?: string;
+  last_accessed?: string;
 };
 
 const protectedTypes = ["core_fact"];

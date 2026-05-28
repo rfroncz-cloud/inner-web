@@ -8,23 +8,16 @@ import {
   normalizeMemoryToEnglish,
 } from "@/lib/globalSignals";
 import { mergeMemoryLists } from "@/lib/memoryOptimizer";
-import { MemoryPanel, type ReflectionFocus } from "./MemoryPanel";
 import { SideDrawer } from "./SideDrawer";
 import { InsightsPanelContent } from "./InsightsPanelContent";
+import { InnerView } from "./InnerView";
 import {
   generateTypingProfile,
   TYPING_MS_PER_CHAR,
 } from "@/lib/typingRealism";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-type ActivePanel =
-  | "reflection"
-  | "memory"
-  | "insights"
-  | "timeline"
-  | "emotions"
-  | "patterns"
-  | null;
+type ActivePanel = "innerview" | "insights" | null;
 import {
   canSendMessage,
   getMaxMemoryCount,
@@ -2411,15 +2404,13 @@ if (
   );
 }
       if (data.memoryCandidate) {
-        setLongTermMemories((prev: any[]) => {
+        setLongTermMemories((prev) => {
           const merged = mergeMemoryLists(
             prev,
             data.memoryCandidate
-          );
-        
-          return merged.slice(
-            -getMaxMemoryCount(userPlan)
-          );
+          ) as LongTermMemory[];
+
+          return merged.slice(-getMaxMemoryCount(userPlan));
         });
       }
 
@@ -2854,33 +2845,12 @@ for (let i = 0; i < aiReply.length; i++) {
     </div>
   </div>
 
-  <div className="flex flex-col items-end gap-2.5">
+  <div className="flex flex-col items-end gap-3">
     <button
-      onClick={() => setActivePanel("reflection")}
-      className="text-[10px] tracking-[0.18em] uppercase text-violet-200/55 hover:text-violet-100/90 transition"
+      onClick={() => setActivePanel("innerview")}
+      className="text-[10px] tracking-[0.18em] uppercase text-violet-200/60 hover:text-violet-100/90 transition"
     >
-      Reflection
-    </button>
-
-    <button
-      onClick={() => setActivePanel("memory")}
-      className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
-    >
-      Memory
-    </button>
-
-    <button
-      onClick={() => setActivePanel("insights")}
-      className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
-    >
-      Insights
-    </button>
-
-    <button
-      onClick={() => setActivePanel("timeline")}
-      className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
-    >
-      Timeline
+      Inner View
     </button>
 
     <button
@@ -3100,8 +3070,12 @@ INNER STATE · {transitionText}
   <SideDrawer
     open={activePanel !== null}
     onClose={() => setActivePanel(null)}
-    title={drawerTitle(activePanel)}
-    subtitle={drawerSubtitle(activePanel)}
+    title={activePanel === "insights" ? "Insights" : "Inner View"}
+    subtitle={
+      activePanel === "insights"
+        ? "How INNER is reading this moment."
+        : "What INNER quietly notices about you."
+    }
   >
     {activePanel === "insights" ? (
       <InsightsPanelContent
@@ -3125,12 +3099,11 @@ INNER STATE · {transitionText}
         selfAwareness={selfAwareness}
       />
     ) : (
-      <MemoryPanel
-        loading={memoriesInitialLoad}
+      <InnerView
         memories={longTermMemories}
         lastUserMessage={lastUserMessage}
+        loading={memoriesInitialLoad}
         onClearAll={clearMemory}
-        focus={panelFocus(activePanel)}
       />
     )}
   </SideDrawer>
@@ -3138,56 +3111,4 @@ INNER STATE · {transitionText}
 );
 }
 
-function panelFocus(panel: ActivePanel): ReflectionFocus {
-  switch (panel) {
-    case "memory":
-      return "remembered";
-    case "timeline":
-      return "timeline";
-    case "emotions":
-      return "emotions";
-    case "patterns":
-      return "patterns";
-    case "reflection":
-    default:
-      return "all";
-  }
-}
-
-function drawerTitle(panel: ActivePanel): string {
-  switch (panel) {
-    case "memory":
-      return "Memory";
-    case "insights":
-      return "Insights";
-    case "timeline":
-      return "Timeline";
-    case "emotions":
-      return "Emotional Signals";
-    case "patterns":
-      return "Relationship Patterns";
-    case "reflection":
-      return "Reflection";
-    default:
-      return "Reflection";
-  }
-}
-
-function drawerSubtitle(panel: ActivePanel): string | undefined {
-  switch (panel) {
-    case "memory":
-      return "Things INNER quietly remembers about you.";
-    case "insights":
-      return "How INNER is reading this moment.";
-    case "timeline":
-      return "What seems to be shifting lately.";
-    case "emotions":
-      return "Feelings INNER notices in the background.";
-    case "patterns":
-      return "How you tend to move with people.";
-    case "reflection":
-      return "What INNER quietly notices. Tentative, not certain.";
-    default:
-      return undefined;
-  }
-}
+// (panel helper functions removed — drawer now uses InnerView tabs directly)

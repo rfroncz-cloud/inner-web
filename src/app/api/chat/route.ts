@@ -38,6 +38,13 @@ import { getRelationshipToneInstruction } from "@/lib/relationshipEvolution";
 import { getResponseLimitInstruction } from "@/lib/costControl";
 import { detectEmotionalState } from "@/lib/emotionalStateEngine";
 import { extractPersonalFacts } from "@/lib/personalFactExtractor";
+import { extractStructuredFacts } from "@/lib/factExtraction";
+import { applyPromptGuardrails } from "@/lib/promptGuardrails";
+import {
+  calculateMemoryImportance,
+  calculateReinforcementScore,
+  getTopMemories,
+} from "@/lib/memoryImportance";
 import { shouldDeleteMemory } from "@/lib/memoryCleanup";
 import { resolvePersonalFact } from "@/lib/personalFactsResolver";
 import { findSimilarMemory } from "@/lib/memoryReinforcement";
@@ -47,7 +54,6 @@ import { calculateRelationshipUpdate } from "@/lib/relationshipEngine";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
 import {
   compressUserProfile,
-  calculateMemoryImportance,
   shouldSaveMemory,
   classifyMemoryType,
   getRelevantMemories,
@@ -426,7 +432,7 @@ if (isNameQuestion) {
     
     const limitedMessages = safeMessages.slice(-config.maxMessages);
     
-    const memoryImportance = calculateMemoryImportance(userMessage);
+    const memoryImportance = calculateMemoryImportance({ memory: userMessage });
     const shouldRemember = shouldSaveMemory(userMessage);
     const memoryType = classifyMemoryType(userMessage);
     const extractedFacts = extractPersonalFacts(userMessage);
@@ -436,6 +442,9 @@ if (isNameQuestion) {
     );
 
 console.log("EXTRACTED FACTS:", extractedFacts);
+
+const structuredFacts = extractStructuredFacts(userMessage);
+console.log("STRUCTURED_FACTS", structuredFacts);
 
 if (safeFacts.length > 0) {
   for (const fact of safeFacts) {
@@ -558,11 +567,30 @@ const contradictionInstruction =
 Use this subtly. Do not mention it every time.`
       : "";
 
+  // Memory Importance & Reinforcement Engine v2 — rank memories by learned
+  // importance so the most meaningful ones drive retrieval. Pure local logic.
+  console.log(
+    "MEMORY_IMPORTANCE",
+    allMemories.map((m: any) => ({
+      memory: (m.memory ?? "").slice(0, 60),
+      importance: calculateMemoryImportance(m),
+    }))
+  );
+  console.log(
+    "MEMORY_REINFORCEMENT",
+    allMemories.map((m: any) => ({
+      memory: (m.memory ?? "").slice(0, 60),
+      reinforcement: calculateReinforcementScore(m),
+    }))
+  );
+
+  const topMemories = getTopMemories(allMemories, 12);
+
   // Memory Compression Engine v1 — collapse all memories + the relationship
   // profile into one short, human, prompt-ready block. Pure local logic; no
   // AI calls, embeddings, or vector search.
   const compressedMemoryContext = compressMemoryContext({
-    memories: allMemories,
+    memories: topMemories,
     relationshipProfile: relationshipPatternProfile,
   });
 
@@ -583,12 +611,14 @@ Use this subtly. Do not mention it every time.`
     .slice(-3)
     .map((m: any) => m?.content || "");
 
+  const relationshipReflectionDecision =
+    relationshipPatternProfile.emotionalTensions.length > 0 ||
+    relationshipPatternProfile.dominantPatterns.length > 0;
+
   const conversationMode = detectConversationMode({
     userMessage,
     emotionalIntensity,
-    relationshipReflectionDecision:
-      relationshipPatternProfile.emotionalTensions.length > 0 ||
-      relationshipPatternProfile.dominantPatterns.length > 0,
+    relationshipReflectionDecision,
     recentAssistantMessages,
     currentMoodState: innerState,
     interactionDepth: safeMessages.length,
@@ -598,6 +628,15 @@ Use this subtly. Do not mention it every time.`
 
   const conversationStyleInstruction =
     getConversationStyleInstruction(conversationMode);
+
+  // Prompt Context Guardrails v1 — gate and clean context before injection.
+  const guardrails = applyPromptGuardrails({
+    rawMemoryContext: compressedMemoryContext.promptContext,
+    rawRelationshipContext: relationshipPatternContext,
+    userMessage,
+    conversationMode,
+    reflectionDecision: relationshipReflectionDecision,
+  });
 
 console.log("RELATIONSHIP STATE:", relationshipState);
 const relationshipToneInstruction =
@@ -790,7 +829,7 @@ ${systemPrompt}
 
 ${selectedMode === "fast" || selectedMode === "core" ? "" : profileContext}
 
-${compressedMemoryContext.promptContext}
+${guardrails.memoryContext}
 
 ${conversationStyleInstruction}
 
@@ -801,7 +840,7 @@ ${shadowPatternInstruction}
 ${memoryMirrorInstruction}
 ${contradictionInstruction}
 ${microMemoryReference}
-${relationshipPatternContext}
+${guardrails.relationshipContext}
 Pattern-aware behavior:
 
 - If a recurring pattern exists, do not treat the message as isolated.
@@ -913,7 +952,14 @@ Format:
       finalState = parsedReply.state;
     }
   } catch {}
-  finalReply = rewriteInnerResponse(finalReply);
+  finalReply = rewriteInnerResponse({
+    rawResponse: finalReply,
+    conversationMode,
+    emotionalIntensity,
+    recentAssistantMessages,
+    relationshipReflectionDecision,
+  });
+  console.log("REWRITTEN_RESPONSE", finalReply);
  
     clearTimeout(timeout);
     console.timeEnd("OPENAI_CHAT_TIME");
