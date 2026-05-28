@@ -1,4 +1,12 @@
-import { detectRelationshipPatterns } from "@/lib/relationshipPatterns";
+import {
+  detectRelationshipPatterns,
+  analyzeRelationshipPatterns,
+} from "@/lib/relationshipPatterns";
+import { compressMemoryContext } from "@/lib/memoryCompression";
+import {
+  detectConversationMode,
+  getConversationStyleInstruction,
+} from "@/lib/conversationMode";
 import {
   detectContradiction,
   getContradictionInstruction,
@@ -34,11 +42,10 @@ import { shouldDeleteMemory } from "@/lib/memoryCleanup";
 import { resolvePersonalFact } from "@/lib/personalFactsResolver";
 import { findSimilarMemory } from "@/lib/memoryReinforcement";
 import { scoreEmotionalMemory } from "@/lib/emotionalMemoryScoring";
-import { rankMemories, memoriesToContext } from "@/lib/memoryRanking";
+import { rankMemories } from "@/lib/memoryRanking";
 import { calculateRelationshipUpdate } from "@/lib/relationshipEngine";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
 import {
-  compressMemories,
   compressUserProfile,
   calculateMemoryImportance,
   shouldSaveMemory,
@@ -416,7 +423,6 @@ if (isNameQuestion) {
     const rankedMemories = rankMemories(allMemories, Math.max(config.maxMemories, 12));
     
     // 4. Zamiana najlepszych memories na context dla GPT
-    const rankedMemoryContext = memoriesToContext(rankedMemories);
     
     const limitedMessages = safeMessages.slice(-config.maxMessages);
     
@@ -526,19 +532,82 @@ const contradictionInstruction =
     userMessage
   );
 
+  const relationshipPatternProfile = analyzeRelationshipPatterns(
+    [
+      ...activeDbMemories,
+      ...detectedPatterns.map((p) => ({
+        memory: p,
+        type: "relationship_pattern",
+        repeat_count: 1,
+      })),
+    ],
+    userMessage
+  );
+
+  console.log(
+    "RELATIONSHIP_PATTERN_PROFILE_V21",
+    relationshipPatternProfile
+  );
+
+  const relationshipPatternContext =
+    relationshipPatternProfile.dominantPatterns.length > 0
+      ? `Relationship pattern insight:
+- summary: ${relationshipPatternProfile.summary}
+- reply hint: ${relationshipPatternProfile.replyHint}
+
+Use this subtly. Do not mention it every time.`
+      : "";
+
+  // Memory Compression Engine v1 — collapse all memories + the relationship
+  // profile into one short, human, prompt-ready block. Pure local logic; no
+  // AI calls, embeddings, or vector search.
+  const compressedMemoryContext = compressMemoryContext({
+    memories: allMemories,
+    relationshipProfile: relationshipPatternProfile,
+  });
+
+  console.log("COMPRESSED_MEMORY_CONTEXT", compressedMemoryContext);
+
+  // Human Conversation Mode Balancer — pick one stance for this turn so INNER
+  // doesn't over-analyze every message. Pure local logic, no AI calls.
+  const emotionalIntensity = Math.max(
+    detectedEmotion.stress,
+    detectedEmotion.sadness,
+    detectedEmotion.anger,
+    detectedEmotion.tiredness,
+    detectedEmotion.loneliness
+  );
+
+  const recentAssistantMessages = safeMessages
+    .filter((m: any) => m?.role === "assistant")
+    .slice(-3)
+    .map((m: any) => m?.content || "");
+
+  const conversationMode = detectConversationMode({
+    userMessage,
+    emotionalIntensity,
+    relationshipReflectionDecision:
+      relationshipPatternProfile.emotionalTensions.length > 0 ||
+      relationshipPatternProfile.dominantPatterns.length > 0,
+    recentAssistantMessages,
+    currentMoodState: innerState,
+    interactionDepth: safeMessages.length,
+  });
+
+  console.log("CONVERSATION_MODE", conversationMode);
+
+  const conversationStyleInstruction =
+    getConversationStyleInstruction(conversationMode);
+
 console.log("RELATIONSHIP STATE:", relationshipState);
 const relationshipToneInstruction =
   getRelationshipToneInstruction(relationshipState);
-    const memoryBlock =
-      rankedMemoryContext.length > 0
-        ? `\n\nEmotionally ranked user memories:\n${rankedMemoryContext}`
-        : "\n\nEmotionally ranked user memories:\nNo important memories yet.";
-    
-    const systemPrompt = `${config.prompt}${memoryBlock}`;
+    // Raw memory list intentionally not injected anymore — the compact
+    // compressedMemoryContext.promptContext replaces it below to cut cost.
+    const systemPrompt = config.prompt;
     const finalThinkingMode = thinkingMode || "casual";
     const finalResponseDepth = responseDepth || "normal";
 
-    const memoryContext = compressMemories(rankedMemories);
     const profileContext = compressUserProfile(userProfile);
     const emotionalState =
     buildEmotionalState(activeDbMemories);
@@ -721,7 +790,9 @@ ${systemPrompt}
 
 ${selectedMode === "fast" || selectedMode === "core" ? "" : profileContext}
 
-${memoryContext}
+${compressedMemoryContext.promptContext}
+
+${conversationStyleInstruction}
 
 ${personalityContext}
 
@@ -730,6 +801,7 @@ ${shadowPatternInstruction}
 ${memoryMirrorInstruction}
 ${contradictionInstruction}
 ${microMemoryReference}
+${relationshipPatternContext}
 Pattern-aware behavior:
 
 - If a recurring pattern exists, do not treat the message as isolated.
@@ -1010,6 +1082,8 @@ Format:
       reply: finalReply,
       state: finalState,
       memoryCandidate,
+      conversationMode,
+      emotionalIntensity,
     });
     
   

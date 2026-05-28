@@ -8,8 +8,23 @@ import {
   normalizeMemoryToEnglish,
 } from "@/lib/globalSignals";
 import { mergeMemoryLists } from "@/lib/memoryOptimizer";
-import Link from "next/link";
+import { MemoryPanel, type ReflectionFocus } from "./MemoryPanel";
+import { SideDrawer } from "./SideDrawer";
+import { InsightsPanelContent } from "./InsightsPanelContent";
+import {
+  generateTypingProfile,
+  TYPING_MS_PER_CHAR,
+} from "@/lib/typingRealism";
 import { FormEvent, useEffect, useRef, useState } from "react";
+
+type ActivePanel =
+  | "reflection"
+  | "memory"
+  | "insights"
+  | "timeline"
+  | "emotions"
+  | "patterns"
+  | null;
 import {
   canSendMessage,
   getMaxMemoryCount,
@@ -324,7 +339,8 @@ const [relationshipStage, setRelationshipStage] = useState<
   
     return () => clearInterval(interval);
   }, [innerState]);
-  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+  const [memoriesInitialLoad, setMemoriesInitialLoad] = useState(true);
 
   const [memoryInsight, setMemoryInsight] = useState(
     "INNER is observing emotional patterns."
@@ -418,6 +434,8 @@ const [relationshipStage, setRelationshipStage] = useState<
         }
       } catch (error) {
         console.error("Failed to load persistent memories:", error);
+      } finally {
+        setMemoriesInitialLoad(false);
       }
     }
   
@@ -2431,7 +2449,25 @@ if (
      
 
       const aiReply = data.response || "";
-      
+
+      const typingProfile = generateTypingProfile({
+        conversationMode: data.conversationMode || "direct",
+        emotionalIntensity: data.emotionalIntensity ?? 0,
+        responseLength: aiReply.length,
+        interactionDepth: nextMessages.length,
+        userMessageLength: text.length,
+      });
+
+      console.log("TYPING_PROFILE", typingProfile);
+
+      const msPerChar = TYPING_MS_PER_CHAR[typingProfile.typingSpeed];
+      const pauseSet = new Set(typingProfile.pauseMoments ?? []);
+
+      // Human-like response delay before INNER starts "typing".
+      await new Promise((resolve) =>
+        setTimeout(resolve, typingProfile.responseDelayMs)
+      );
+
       const assistantMessage: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -2444,8 +2480,10 @@ let currentText = "";
 for (let i = 0; i < aiReply.length; i++) {
   currentText += aiReply[i];
 
+  const extraPause = pauseSet.has(i) ? 280 : 0;
+
   await new Promise((resolve) =>
-    setTimeout(resolve, typingSpeed)
+    setTimeout(resolve, msPerChar + extraPause)
   );
 
   setMessages((prev) =>
@@ -2816,19 +2854,33 @@ for (let i = 0; i < aiReply.length; i++) {
     </div>
   </div>
 
-  <div className="flex flex-col items-end gap-3">
-    <Link
-      href="/memory"
+  <div className="flex flex-col items-end gap-2.5">
+    <button
+      onClick={() => setActivePanel("reflection")}
+      className="text-[10px] tracking-[0.18em] uppercase text-violet-200/55 hover:text-violet-100/90 transition"
+    >
+      Reflection
+    </button>
+
+    <button
+      onClick={() => setActivePanel("memory")}
       className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
     >
       Memory
-    </Link>
+    </button>
 
     <button
-      onClick={() => setShowMemoryPanel((prev) => !prev)}
+      onClick={() => setActivePanel("insights")}
       className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
     >
       Insights
+    </button>
+
+    <button
+      onClick={() => setActivePanel("timeline")}
+      className="text-[10px] tracking-[0.18em] uppercase text-violet-300/45 hover:text-violet-200/80 transition"
+    >
+      Timeline
     </button>
 
     <button
@@ -2840,214 +2892,6 @@ for (let i = 0; i < aiReply.length; i++) {
   </div>
 </div>
 </div>
-{showMemoryPanel && (
-  <div className="mx-6 mt-5 rounded-[2rem] border border-violet-300/10 bg-black/35 px-5 py-5 shadow-[0_30px_100px_rgba(139,92,246,0.10)] backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 duration-500">
-
-    <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-2">
-      Memory Insight
-    </p>
-
-    <p className="text-sm leading-relaxed text-white/45">
-      {memoryInsight}
-    </p>
-
-    <div className="mt-4 flex flex-wrap gap-3">
-      {memoryCards.map((card, index) => (
-        <div
-          key={`${card}-${index}`}
-          className="rounded-full border border-violet-300/10 bg-violet-500/[0.05] px-4 py-2"
-        >
-          <p className="text-xs tracking-[0.12em] uppercase text-violet-100/55">
-            {card}
-          </p>
-        </div>
-      ))}
-    </div>
-
-    {userProfile.length > 0 && (
-      <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-5">
-        <p className="text-[10px] uppercase tracking-[0.25em] text-white/30 mb-4">
-          User Profile
-        </p>
-
-        <div className="space-y-3">
-          {userProfile.map((memory, index) => (
-            <p
-              key={`${memory}-${index}`}
-              className="text-sm leading-relaxed text-white/55"
-            >
-              {memory}
-            </p>
-          ))}
-        </div>
-      </div>
-    )}
-
-    {longTermMemories.length > 0 && (
-      <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-        <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-4">
-          Long-Term Memory
-        </p>
-
-        <div className="space-y-3">
-          {longTermMemories.map((memory, index) => (
-            <div key={`${memory.type}-${index}`}>
-              <p className="text-[10px] uppercase tracking-[0.18em] text-violet-300/30 mb-1">
-                {memory.type}
-              </p>
-              <p className="text-[9px] uppercase tracking-[0.2em] text-white/25 mb-1">
-  confidence · adaptive memory
-</p>
-              <p className="text-sm leading-relaxed text-white/50">
-                {memory.memory}
-              </p>
-            </div>
-          ))}
-        </div>
-      </div>
-    )}
-
-    <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.04] px-5 py-5">
-      <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-5">
-        Emotional Metrics
-      </p>
-      <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Emotional Aura
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    AI Presence Detection
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Voice Consciousness
-  </p>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    {voiceConsciousness}
-  </p>
-</div>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    User presence: {presenceStatus}
-  </p>
-</div>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    INNER aura intensity: {auraIntensity}
-  </p>
-</div>
-      <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-5">
-    Relationship Depth
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Predictive Emotion Reading
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-white/[0.025] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-white/30 mb-3">
-    Silence Mode
-  </p>
-
-  <p className="text-sm leading-relaxed text-white/50 italic">
-    {silenceMode
-      ? "INNER is reducing verbal pressure and holding quieter presence."
-      : "INNER is maintaining normal conversational presence."}
-  </p>
-</div>
-<div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Response Depth
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Dream Layer
-  </p>
-  <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-  <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-    Relationship Evolution
-  </p>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    INNER relationship stage: {relationshipStage}
-  </p>
-</div>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    {dreamLayer}
-  </p>
-</div>
-
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    INNER is currently using {responseDepth} response depth.
-  </p>
-</div>
-  <p className="text-sm leading-relaxed text-white/55 italic">
-    {predictiveEmotion}
-  </p>
-</div>
-  <MetricBar label="Attachment" value={attachmentScore} />
-
-  <p className="mt-4 text-xs leading-relaxed text-white/35">
-    INNER is slowly adapting to the emotional rhythm of this relationship.
-  </p>
-</div>
-
-      <div className="space-y-4">
-        <MetricBar label="Stress" value={emotionScore.stress} />
-        <MetricBar label="Mental Clarity" value={emotionScore.clarity} />
-        <MetricBar label="Energy" value={emotionScore.energy} />
-      </div>
-    </div>
-
-    <div className="mt-5 rounded-[1.5rem] border border-violet-300/10 bg-violet-500/[0.03] px-5 py-5">
-      <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40 mb-3">
-        Current Thought
-      </p>
-      <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-white/25">
-  personality mode · {personalityMode}
-</p>
-      <p className="text-sm italic leading-relaxed text-white/55">
-        {innerThought}
-      </p>
-      <p className="mt-4 text-xs leading-relaxed text-violet-200/35 italic">
-  {selfAwareness}
-</p>
-    </div>
-
-    {consciousness.length > 0 && (
-      <div className="mt-5 space-y-3">
-        <p className="text-[10px] uppercase tracking-[0.25em] text-violet-200/40">
-          Inner Consciousness
-        </p>
-
-        {consciousness.map((item, index) => (
-          <div
-            key={index}
-            className="
-  rounded-2xl
-  border border-white/5
-  bg-white/[0.02]
-  px-4 py-3
-  animate-in
-  fade-in
-  slide-in-from-top-2
-  duration-700
-"
-          >
-            <p className="text-sm leading-relaxed text-white/60">
-              {item}
-            </p>
-          </div>
-        ))}
-      </div>
-    )}
-
-  </div>
-)}
-
 <div
   ref={listRef}
   className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6 pb-4"
@@ -3252,24 +3096,98 @@ INNER STATE · {transitionText}
           </div>
         </form>
   </div>
+
+  <SideDrawer
+    open={activePanel !== null}
+    onClose={() => setActivePanel(null)}
+    title={drawerTitle(activePanel)}
+    subtitle={drawerSubtitle(activePanel)}
+  >
+    {activePanel === "insights" ? (
+      <InsightsPanelContent
+        memoryInsight={memoryInsight}
+        memoryCards={memoryCards}
+        userProfile={userProfile}
+        longTermMemories={longTermMemories}
+        emotionScore={emotionScore}
+        attachmentScore={attachmentScore}
+        voiceConsciousness={voiceConsciousness}
+        presenceStatus={presenceStatus}
+        predictiveEmotion={predictiveEmotion}
+        dreamLayer={dreamLayer}
+        relationshipStage={relationshipStage}
+        responseDepth={responseDepth}
+        silenceMode={silenceMode}
+        innerThought={innerThought}
+        consciousness={consciousness}
+        auraIntensity={auraIntensity}
+        personalityMode={personalityMode}
+        selfAwareness={selfAwareness}
+      />
+    ) : (
+      <MemoryPanel
+        loading={memoriesInitialLoad}
+        memories={longTermMemories}
+        lastUserMessage={lastUserMessage}
+        onClearAll={clearMemory}
+        focus={panelFocus(activePanel)}
+      />
+    )}
+  </SideDrawer>
 </main>
 );
 }
 
-function MetricBar({ label, value }: { label: string; value: number }) {
-  return (
-    <div>
-      <div className="flex justify-between text-xs text-white/40 mb-2">
-        <span>{label}</span>
-        <span>{value}%</span>
-      </div>
+function panelFocus(panel: ActivePanel): ReflectionFocus {
+  switch (panel) {
+    case "memory":
+      return "remembered";
+    case "timeline":
+      return "timeline";
+    case "emotions":
+      return "emotions";
+    case "patterns":
+      return "patterns";
+    case "reflection":
+    default:
+      return "all";
+  }
+}
 
-      <div className="h-2 rounded-full bg-white/5 overflow-hidden">
-        <div
-          className="h-full rounded-full bg-violet-400/70"
-          style={{ width: `${value}%` }}
-        />
-      </div>
-    </div>
-  );
+function drawerTitle(panel: ActivePanel): string {
+  switch (panel) {
+    case "memory":
+      return "Memory";
+    case "insights":
+      return "Insights";
+    case "timeline":
+      return "Timeline";
+    case "emotions":
+      return "Emotional Signals";
+    case "patterns":
+      return "Relationship Patterns";
+    case "reflection":
+      return "Reflection";
+    default:
+      return "Reflection";
+  }
+}
+
+function drawerSubtitle(panel: ActivePanel): string | undefined {
+  switch (panel) {
+    case "memory":
+      return "Things INNER quietly remembers about you.";
+    case "insights":
+      return "How INNER is reading this moment.";
+    case "timeline":
+      return "What seems to be shifting lately.";
+    case "emotions":
+      return "Feelings INNER notices in the background.";
+    case "patterns":
+      return "How you tend to move with people.";
+    case "reflection":
+      return "What INNER quietly notices. Tentative, not certain.";
+    default:
+      return undefined;
+  }
 }
