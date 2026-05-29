@@ -248,6 +248,9 @@ export function applyPromptGuardrails(params: {
   reflectionDecision: boolean;
   maxMemoryLines?: number;
   maxRelationshipLines?: number;
+  /** Force memory injection regardless of the simple/minimal gate (e.g. direct
+   *  family questions that must always return the full family list). */
+  forceInjectMemory?: boolean;
 }): GuardrailsResult {
   const {
     rawMemoryContext,
@@ -257,9 +260,12 @@ export function applyPromptGuardrails(params: {
     reflectionDecision,
     maxMemoryLines = 8,
     maxRelationshipLines = 3,
+    forceInjectMemory = false,
   } = params;
 
-  const injectMemory = shouldInjectMemoryContext(userMessage, conversationMode);
+  const injectMemory =
+    forceInjectMemory ||
+    shouldInjectMemoryContext(userMessage, conversationMode);
   const injectRelationship = shouldInjectRelationshipContext(
     userMessage,
     reflectionDecision

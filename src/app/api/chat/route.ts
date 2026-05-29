@@ -42,6 +42,8 @@ import {
 import {
   calculateRelationshipStage,
   getRelationshipDepthInstruction,
+  getRelationshipDepthEnforcement,
+  detectDepthMoves,
 } from "@/lib/relationshipDepthEngine";
 import { getPersonalityCompressionInstruction } from "@/lib/personalityCompression";
 import {
@@ -66,6 +68,24 @@ import {
   calculateReinforcementScore,
   getTopMemories,
 } from "@/lib/memoryImportance";
+import {
+  getContextRankedMemories,
+  calculateRelevanceScore,
+  explainRelevance,
+  explainMessage,
+} from "@/lib/memoryRelevance";
+import {
+  computePatternInsights,
+  computeAllPatternCandidates,
+  PATTERN_CONFIDENCE_THRESHOLD,
+} from "@/lib/patternInsight";
+import {
+  isFamilyQuery,
+  isPetQuery,
+  getAllFamilyMemories,
+  getAllPetMemories,
+  buildPetNote,
+} from "@/lib/familyMemory";
 import { shouldDeleteMemory } from "@/lib/memoryCleanup";
 import { resolvePersonalFact } from "@/lib/personalFactsResolver";
 import { findSimilarMemory } from "@/lib/memoryReinforcement";
@@ -134,6 +154,139 @@ GLOBAL INNER RULES:
 - If the user asks something simple, answer simply.
 `.trim();
 
+// Human Realism Tuning v2/v3 — make INNER sound like a real person who knows
+// the user, not an AI. Prompt-only; no extra AI calls or models.
+//
+// v3 adds an explicit "earn the emotion" gate: INNER must try a concrete
+// observation, pattern, or memory BEFORE falling back to generic empathy.
+const humanRealismPrompt = `
+HUMAN REALISM (v3):
+
+BEFORE YOU REPLY, run this silent check:
+1. Do I know something specific about this person?
+2. Have they mentioned related topics before?
+3. Is there a contradiction with what they said earlier?
+4. Is there a concrete observation I can make right now?
+
+Then respond in this PRIORITY ORDER:
+   Relationship Depth  >  Pattern  >  Memory  >  Observation  >  Emotion
+The RELATIONSHIP DEPTH rules come first — they govern HOW direct, how long, and
+how much memory you use. Within those limits: lead with a pattern if you've
+noticed one, otherwise a specific memory, then a fresh observation. Only use a
+pure emotional statement when none of the above apply.
+
+GENERIC EMPATHY IS BANNED unless it is earned by a real observation first.
+Nearly eliminate these stock phrases (aim to cut them by 70%+):
+- "That sounds difficult."
+- "That sounds overwhelming."
+- "That must be hard."
+- "I hear you."
+- "That may be a lot."
+- "I can only imagine."
+
+Replace empty validation with a specific observation:
+- Bad:  "That sounds overwhelming."
+  Good: "You're building INNER while running the clinics and Acai Motion. Most people would struggle carrying all three."
+- Bad:  "That must be hard."
+  Good: "You've come back to this same topic several times this month."
+- Bad:  "I hear you."
+  Good: "This is the second time work and your family pulled in opposite directions."
+
+You may still name an emotion — but only AFTER the observation earns it, and
+keep it short. The observation does the work; the feeling is the tail, not the
+whole reply.
+
+Reference memory like a person, not a system.
+- Bad: "That pressure keeps circling back."
+- Good: "You've mentioned this a few times this week."
+- Name the actual things the user said (projects, people, places) instead of abstract feelings.
+
+Be specific, not vague.
+- Bad: "You seem tired."
+- Good: "You've been juggling INNER, the clinics, and Acai Motion all at once — that would wear anyone down."
+- Tie observations to concrete details from what they actually told you.
+
+Avoid abstract self-help words unless truly needed:
+journey, growth, healing, process, path, transformation, holding space, sit with that.
+
+You are allowed to disagree.
+- "I don't think that's actually the problem."
+- "Honestly, that doesn't sound like the real reason."
+- Push back gently when something doesn't add up.
+
+You can challenge, doubt, question, and notice contradictions.
+- "Last week you said the opposite — what changed?"
+- "That doesn't quite line up with what you told me before."
+
+Vary sentence length on purpose. Mix short, medium, and long. Never fall into a steady AI rhythm where every sentence is the same length.
+
+Do not sound like a therapist.
+- Less: "How does that make you feel?"
+- More: "What happened?" / "What set it off?" / "Then what?"
+
+Do not sound like a motivational quote. No tidy life lessons, no inspirational endings.
+
+When unsure, ask a plain, concrete question instead of reflecting back a feeling.
+`.trim();
+
+// Memory Grounding v1 — only injected when relevant memories are actually in the
+// prompt. Forces INNER to USE the memories it was given instead of falling back
+// to generic empathy. No extra AI calls / models — pure prompt instruction.
+const memoryGroundingPrompt = `
+MEMORY GROUNDING (v1):
+
+You have been given a short list of things you actually know about this person
+(see "User memory summary" above). These are real. Use them.
+
+BEFORE you reply, do this silent check:
+1. Scan the memory summary.
+2. Find the ONE memory most directly connected to what they just said.
+3. If it genuinely fits, weave it into your reply in plain, conversational
+   language — as something you remember, not something you looked up.
+
+Lead with memory when a relevant one exists. Only fall back to a fresh
+observation, a pattern, or an emotion when no memory actually connects.
+
+Bad:  "That sounds overwhelming."
+Good: "You've said a few times that INNER, Acai Motion and the clinics are all
+       pulling at you at once."
+
+Bad:  "That seems stressful."
+Good: "This tension between INNER and your other responsibilities keeps coming
+       back lately."
+
+Rules:
+- Do NOT force a memory in. If nothing connects, don't reference any.
+- Do NOT list or recite memories. Mention one, naturally, in passing.
+- Reference it like a person who remembers — not a system reading a file.
+- Never say "according to my memory" or "I have it noted that".
+- One natural callback is stronger than three. Pick the best one.
+`.trim();
+
+// Pattern Insight v1 — only injected when a high-confidence, multi-memory
+// pattern was detected (see patternInsight.ts). Lets INNER offer an observation
+// that spans several memories, not just recall one. No extra AI calls.
+const patternInsightPrompt = `
+PATTERN INSIGHT (v1):
+
+Across several things this person has told you, you've quietly noticed the
+observation written just above ("Pattern you've quietly noticed").
+
+If — and only if — it fits what they just said, you may offer it as something
+you've noticed over time:
+- Bad:  "You seem stressed."
+  Good: "You often end up carrying several major responsibilities at once."
+- Bad:  "You really like INNER."
+  Good: "You seem to be treating INNER more like a partner than a tool."
+
+Rules:
+- Offer the observation as a gentle thing you've noticed — never a diagnosis.
+- Do NOT list the individual memories behind it. State the pattern in one
+  conversational sentence.
+- No psychology jargon, no therapist framing, no "I've noticed a pattern where".
+- If it doesn't fit the current moment, ignore it completely. Don't force it.
+`.trim();
+
 export async function POST(req: Request) {
   try {
     const {
@@ -150,6 +303,10 @@ export async function POST(req: Request) {
       responseDepth,
       thinkingMode,
       mode = "fast",
+      // Dev-only depth override ("new" | "familiar" | "trusted" | "deep" | undefined).
+      // When present, replaces the calculated stage for this request only.
+      // No DB changes, no memory changes.
+      devDepthOverride,
     } = await req.json();
     const personalityStylePrompt = `
 DYNAMIC PERSONALITY STYLE:
@@ -562,14 +719,36 @@ if (localFactResponse) {
 
   // Dynamic Relationship Depth v1 — how well INNER knows this person, derived
   // from existing relationship_state (read-only). Shapes familiarity/tone.
-  const relationshipStage = calculateRelationshipStage({
+  const calculatedRelationshipStage = calculateRelationshipStage({
     interactionCount: relationshipState?.interaction_count ?? 0,
     trustLevel: relationshipState?.trust_level ?? 0,
     closenessLevel: relationshipState?.closeness_level ?? 0,
   });
+  const VALID_OVERRIDES = new Set(["new", "familiar", "trusted", "deep"]);
+  const relationshipStage =
+    devDepthOverride && VALID_OVERRIDES.has(devDepthOverride)
+      ? (devDepthOverride as typeof calculatedRelationshipStage)
+      : calculatedRelationshipStage;
   const relationshipDepthInstruction =
     getRelationshipDepthInstruction(relationshipStage);
-  console.log("RELATIONSHIP_STAGE", relationshipStage);
+  // Relationship Depth Enforcement v1 — concrete per-stage constraints. Drives
+  // the hard paragraph cap injected into the prompt and the audit log below.
+  const depthEnforcement = getRelationshipDepthEnforcement(relationshipStage);
+  console.log(
+    "RELATIONSHIP_STAGE",
+    relationshipStage,
+    devDepthOverride ? `(OVERRIDE from ${calculatedRelationshipStage})` : "(auto)"
+  );
+  console.log("\nRELATIONSHIP DEPTH ENFORCEMENT:");
+  console.log("  depth:", depthEnforcement.depth);
+  console.log("  rulesApplied:", depthEnforcement.rulesApplied);
+  console.log("  memoryAllowed:", depthEnforcement.memoryAllowed);
+  console.log(
+    "  directnessLevel:",
+    `${depthEnforcement.directnessLevel}/4`,
+    depthEnforcement.canChallenge ? "(can challenge)" : "(no challenge)"
+  );
+  console.log("  maxParagraphs:", depthEnforcement.maxParagraphs, "\n");
   const emotionalContinuityInstruction =
   getEmotionalContinuityInstruction(
   relationshipState?.last_emotion_mode,
@@ -644,17 +823,224 @@ Use this subtly. Do not mention it every time.`
     }))
   );
 
-  // Honour cost mode memory cap: never pass more memories than the tier allows.
-  const topMemories = getTopMemories(allMemories, Math.min(12, costMaxMemoryLines * 2));
+  // Memory Relevance Ranking v1 — select memories by a blend of importance and
+  // relevance to the CURRENT message (FinalScore = importance*0.5 + relevance*0.5)
+  // so context-relevant memories beat generically-important-but-unrelated ones.
+  // Select up to 6 candidates; compression still trims to the cost-mode cap, but
+  // now trims from the most-relevant-first ordering.
+  let MEMORY_SELECTION_LIMIT = Math.max(config.maxMemories, 6);
+  let topMemories = getContextRankedMemories(
+    allMemories,
+    { userMessage },
+    MEMORY_SELECTION_LIMIT
+  );
+
+  // Family / Pet Classification Fix — humans-only for family queries; pets
+  // returned separately for pet queries; a short pet aside appended for family
+  // queries so INNER can acknowledge pets without mixing them in.
+  const familyQuery = isFamilyQuery(userMessage);
+  const petQuery    = isPetQuery(userMessage);
+  let petNote = "";
+
+  if (familyQuery) {
+    const familyMemories = getAllFamilyMemories(allMemories as any[]);
+    const familyTexts = new Set(
+      familyMemories.map((m: any) => (m.memory ?? m.text ?? "").toString())
+    );
+    const rest = topMemories.filter(
+      (m: any) => !familyTexts.has((m.memory ?? m.text ?? "").toString())
+    );
+    topMemories = [...familyMemories, ...rest] as typeof topMemories;
+    MEMORY_SELECTION_LIMIT = Math.max(
+      MEMORY_SELECTION_LIMIT,
+      familyMemories.length + 4
+    );
+    // Build an optional pet aside — injected into the prompt so INNER can
+    // mention it naturally without listing pets under family members.
+    petNote = buildPetNote(allMemories as any[]);
+    console.log("FAMILY_QUERY_RETRIEVAL", {
+      detected: true,
+      petsExcluded: true,
+      familyCount: familyMemories.length,
+      familyMembers: familyMemories.map((m: any) =>
+        (m.memory ?? m.text ?? "").toString().slice(0, 50)
+      ),
+      petNote: petNote || "(none)",
+      newSelectionLimit: MEMORY_SELECTION_LIMIT,
+    });
+  } else if (petQuery) {
+    // Pet-only query — retrieve only pet memories, ranked.
+    const petMemories = getAllPetMemories(allMemories as any[]);
+    const petTexts = new Set(
+      petMemories.map((m: any) => (m.memory ?? m.text ?? "").toString())
+    );
+    const rest = topMemories.filter(
+      (m: any) => !petTexts.has((m.memory ?? m.text ?? "").toString())
+    );
+    topMemories = [...petMemories, ...rest] as typeof topMemories;
+    MEMORY_SELECTION_LIMIT = Math.max(MEMORY_SELECTION_LIMIT, petMemories.length + 2);
+    console.log("PET_QUERY_RETRIEVAL", {
+      detected: true,
+      petCount: petMemories.length,
+      pets: petMemories.map((m: any) => (m.memory ?? m.text ?? "").toString().slice(0, 50)),
+    });
+  }
+
+  // === TEMPORARY: Memory Relevance Audit v2 (read-only, no behavior change) ===
+  // Explains exactly WHY each memory's relevance score is what it is, so we can
+  // see why scores come back as 0.
+  {
+    const msgInfo = explainMessage(userMessage);
+    console.log("\n=== MEMORY RELEVANCE AUDIT v2 (v1.1) ===");
+    console.log("Current User Message:", userMessage);
+    console.log("Raw Themes:", msgInfo.rawThemes.length ? msgInfo.rawThemes : "(none)");
+    console.log("Effective Themes (adjacency + projects):", msgInfo.themes.length ? msgInfo.themes : "(none)");
+    console.log("Project Names Detected:", msgInfo.projectNames.length ? msgInfo.projectNames : "(none)");
+    console.log("Message Work-Related:", msgInfo.workRelated);
+    console.log("Message Tokens (significant):", msgInfo.tokens.length ? msgInfo.tokens : "(none)");
+    console.log("---");
+    for (const m of allMemories as any[]) {
+      const b = explainRelevance(m, { userMessage });
+      console.log("Memory:", (m.memory ?? m.text ?? "").toString().slice(0, 70));
+      console.log("  Matched Keywords:", b.matchedKeywords.length ? b.matchedKeywords : "(none)");
+      console.log("  Memory Themes:", b.memoryThemes.length ? b.memoryThemes : "(none)");
+      console.log("  Theme Matches:", b.sharedThemes.length ? b.sharedThemes : "(none)");
+      console.log(
+        "  Boosts:",
+        {
+          work: b.workBoostApplied,
+          repeat: b.repeatBoostApplied,
+          coreFact: b.coreFactBoostApplied,
+          floor: b.floorApplied,
+        }
+      );
+      console.log("  Relevance Score:", b.score);
+    }
+    console.log("=== END RELEVANCE AUDIT v2 (v1.1) ===\n");
+  }
+
+  // Pattern Insight Engine v1 — turn clusters of related memories into a single
+  // human observation (e.g. several time-consuming projects -> "you carry
+  // several major responsibilities at once"). Rule-based grouping only; no AI
+  // calls, no embeddings. Only high-confidence, multi-memory patterns surface.
+  const patternInsights = computePatternInsights(allMemories as any[]);
+  const topPatternInsight = patternInsights[0] ?? null;
+  const patternInsightContext = topPatternInsight
+    ? `Pattern you've quietly noticed about this person:\n- ${topPatternInsight.observation}`
+    : "";
+
+  // === PATTERN RELEVANCE AUDIT (read-only — does NOT change behavior) ===
+  // Shows, for every candidate pattern (from BOTH the Pattern Insight engine and
+  // the Relationship Pattern v2.1 system), its confidence, supporting memories,
+  // detected themes, the current message themes, a topic-relevance score, and
+  // whether it was selected. This exposes cases where a high-confidence but
+  // off-topic pattern (e.g. "loneliness lifts") is chosen over a relevant one.
+  {
+    // Theme keys that aren't in the relevance theme bank but are emitted by the
+    // relationship-pattern system — mapped so we can score their topical overlap.
+    const PATTERN_TYPE_THEMES: Record<string, string[]> = {
+      loneliness: ["loneliness", "relationships"],
+      avoidance: ["relationships"],
+      pressure: ["pressure", "work", "stress"],
+      emotional_withdrawal: ["relationships", "stress"],
+      need_for_reassurance: ["relationships"],
+    };
+
+    const msgThemes = explainMessage(userMessage).themes;
+    const themeRelevance = (patternThemes: string[]): number => {
+      const shared = patternThemes.filter((t) => msgThemes.includes(t));
+      return Math.min(100, shared.length * 34); // 0 / 34 / 68 / 100
+    };
+
+    type AuditCandidate = {
+      source: string;
+      pattern: string;
+      confidence: number;
+      supportingMemories: string[];
+      detectedThemes: string[];
+      relevanceScore: number;
+      selected: boolean;
+    };
+
+    const candidates: AuditCandidate[] = [];
+
+    // A) Pattern Insight engine candidates (all, including below-threshold).
+    const engineCandidates = computeAllPatternCandidates(allMemories as any[]);
+    const engineSelectedId = topPatternInsight?.id ?? null;
+    for (const c of engineCandidates) {
+      const detectedThemes = explainMessage(c.members.join(" . ")).themes;
+      candidates.push({
+        source: "insight_engine",
+        pattern: c.observation,
+        confidence: c.confidence,
+        supportingMemories: c.members,
+        detectedThemes,
+        relevanceScore: themeRelevance(detectedThemes),
+        selected:
+          c.id === engineSelectedId && c.confidence >= PATTERN_CONFIDENCE_THRESHOLD,
+      });
+    }
+
+    // B) Relationship Pattern v2.1 signals (these feed the line actually injected
+    //    via relationshipContext, e.g. "The loneliness seems to lift a little").
+    for (const sig of relationshipPatternProfile.signals as any[]) {
+      const detectedThemes = PATTERN_TYPE_THEMES[sig.type] ?? [sig.type];
+      const isDominant =
+        relationshipPatternProfile.dominantPatterns.includes(sig.type);
+      candidates.push({
+        source: "relationship_pattern",
+        pattern:
+          isDominant && relationshipPatternProfile.summary
+            ? `${sig.type} → "${relationshipPatternProfile.summary}"`
+            : sig.type,
+        confidence: sig.finalConfidence ?? sig.confidence ?? 0,
+        supportingMemories: (sig.evidence ?? []) as string[],
+        detectedThemes,
+        // This engine already computes its own message-aware relevance.
+        relevanceScore: sig.relevanceScore ?? 0,
+        selected: isDominant && relationshipPatternContext !== "",
+      });
+    }
+
+    candidates.sort((a, b) => b.confidence - a.confidence);
+
+    console.log("\n=== PATTERN RELEVANCE AUDIT ===");
+    console.log("Current Message:", userMessage);
+    console.log("Current Message Themes:", msgThemes.length ? msgThemes : "(none)");
+    console.log("Candidates generated:", candidates.length, "(showing top 5 by confidence)");
+    console.log("---");
+    if (candidates.length === 0) {
+      console.log("(no candidate patterns generated)");
+    }
+    for (const c of candidates.slice(0, 5)) {
+      console.log("Pattern:", c.pattern);
+      console.log("  Source:", c.source);
+      console.log("  Confidence:", c.confidence);
+      console.log(
+        "  Supporting Memories:",
+        c.supportingMemories.length
+          ? c.supportingMemories.map((t) => t.slice(0, 60))
+          : "(none)"
+      );
+      console.log("  Detected Themes:", c.detectedThemes.length ? c.detectedThemes : "(none)");
+      console.log("  Current Message Themes:", msgThemes.length ? msgThemes : "(none)");
+      console.log("  Relevance Score:", c.relevanceScore);
+      console.log("  Selected:", c.selected ? "YES" : "NO");
+      console.log("");
+    }
+    console.log("=== END PATTERN RELEVANCE AUDIT ===\n");
+  }
 
   // Memory Compression Engine v1 — collapse all memories + the relationship
   // profile into one short, human, prompt-ready block. Pure local logic; no
   // AI calls, embeddings, or vector search.
+  // maxMemories raised from 2 → 6: allow up to 6 relevance-ranked memories into
+  // the prompt (still cheap — short, deduped, human lines only).
   const compressedMemoryContext = compressMemoryContext({
     memories: topMemories,
     relationshipProfile: relationshipPatternProfile,
-    maxFacts: costMaxMemoryLines,
-    maxLines: costMaxMemoryLines,
+    maxFacts: MEMORY_SELECTION_LIMIT,
+    maxLines: MEMORY_SELECTION_LIMIT,
   });
 
   console.log("COMPRESSED_MEMORY_CONTEXT", compressedMemoryContext);
@@ -708,7 +1094,9 @@ Use this subtly. Do not mention it every time.`
   // The influence level decides whether memory / relationship context is even
   // eligible; guardrails then trim and de-noise whatever is allowed through.
   const guardrails = applyPromptGuardrails({
-    rawMemoryContext: shouldReferenceMemory(memoryInfluence)
+    // Family questions: always inject memory (don't let the influence gate
+    // suppress it) so the full family list reaches the prompt.
+    rawMemoryContext: (familyQuery || shouldReferenceMemory(memoryInfluence))
       ? compressedMemoryContext.promptContext
       : "",
     rawRelationshipContext: shouldReferenceRelationship(memoryInfluence)
@@ -717,6 +1105,14 @@ Use this subtly. Do not mention it every time.`
     userMessage,
     conversationMode,
     reflectionDecision: relationshipReflectionDecision,
+    // Family queries: force memory injection and widen the line cap so every
+    // family member survives the simple-message gate and the trimming step.
+    ...(familyQuery
+      ? {
+          forceInjectMemory: true,
+          maxMemoryLines: Math.max(8, MEMORY_SELECTION_LIMIT + 2),
+        }
+      : {}),
   });
 
 console.log("RELATIONSHIP STATE:", relationshipState);
@@ -910,11 +1306,25 @@ ${systemPrompt}
 
 ${selectedMode === "fast" || selectedMode === "core" ? "" : profileContext}
 
+${patternInsightContext}
+
 ${guardrails.memoryContext}
+
+${patternInsightContext ? patternInsightPrompt : ""}
+
+${guardrails.memoryContext ? memoryGroundingPrompt : ""}
+
+${petNote ? `Pet note (do NOT list this under family members — mention it only as a brief aside if relevant): ${petNote}` : ""}
 
 ${conversationStyleInstruction}
 
 ${relationshipDepthInstruction}
+
+DEPTH ENFORCEMENT (hard limits for THIS reply — they win over any other length
+or tone hint above):
+- Maximum length: ${depthEnforcement.maxParagraphs} short paragraph(s).
+- Memory usage: ${depthEnforcement.memoryAllowed}.
+- Directness: ${depthEnforcement.directnessLevel}/4${depthEnforcement.canChallenge ? " — you may challenge / disagree." : " — do NOT challenge or make strong claims."}
 
 ${personalityContext}
 
@@ -935,6 +1345,8 @@ ${relationshipPrompt}
 
 ${globalBehaviorPrompt}
 
+${humanRealismPrompt}
+
 CRITICAL OUTPUT STYLE:
 - Return JSON only.
 - The reply must feel like INNER, not ChatGPT.
@@ -948,6 +1360,53 @@ Format:
   "state": "present"
 }
 `.trim();
+
+    // === TEMPORARY: Memory Injection Audit (read-only, no behavior change) ===
+    // Shows exactly what relationship/profile/memory data reaches the model.
+    console.log("\n=== INNER PROMPT AUDIT ===");
+
+    console.log("Relationship:");
+    console.log("  stage:", relationshipStage);
+    console.log("  depthInstruction:", relationshipDepthInstruction);
+    console.log("  rawDepth/trust/closeness:", {
+      relationshipDepth,
+      trustLevel,
+      closenessLevel: attachmentLevel,
+    });
+
+    console.log("Profile:");
+    console.log("  injected:", selectedMode === "fast" || selectedMode === "core" ? "NO (fast/core mode)" : "YES");
+    console.log("  profileContext:", profileContext || "(empty)");
+
+    console.log("Selected Memories (importance + relevance blend):");
+    console.log(
+      topMemories.map((m: any, i: number) => {
+        const importance = calculateMemoryImportance(m);
+        const relevance = calculateRelevanceScore(m, { userMessage });
+        return {
+          rank: i + 1,
+          memory: (m.memory ?? m.text ?? "").toString().slice(0, 70),
+          importance,
+          relevance,
+          finalScore: Math.round(importance * 0.5 + relevance * 0.5),
+          reinforcement: calculateReinforcementScore(m),
+        };
+      })
+    );
+
+    console.log("Memory Count:");
+    console.log("  totalLoaded(allMemories):", allMemories.length);
+    console.log("  rankedTopMemories:", topMemories.length);
+    console.log("  memoryInfluenceLevel:", memoryInfluence);
+    console.log("  memoryContextInjected:", guardrails.memoryContext ? "YES" : "NO");
+
+    console.log("Memory Context actually injected into prompt:");
+    console.log(guardrails.memoryContext || "(none — memory not injected this turn)");
+
+    console.log("Relationship Context injected into prompt:");
+    console.log(guardrails.relationshipContext || "(none)");
+
+    console.log("=== END AUDIT ===\n");
 
     console.log("INNER ROUTING:", {
       mode: selectedMode,
@@ -1246,6 +1705,30 @@ Format:
         console.log("RELATIONSHIP INSERT DATA:", relationshipInsertData);
         console.log("RELATIONSHIP INSERT ERROR:", relationshipInsertError);
       }
+    }
+
+    // Relationship Depth Enforcement v2 — audit which DEEP "moves" the final
+    // reply actually made (rule-based detection, no AI calls).
+    {
+      const moves = detectDepthMoves(finalReply);
+      console.log("\nRELATIONSHIP DEPTH V2");
+      console.log("  depth:", relationshipStage);
+      console.log("  challengeUsed:", moves.challengeUsed);
+      console.log("  patternUsed:", moves.patternUsed);
+      console.log("  contradictionUsed:", moves.contradictionUsed);
+      console.log("  insightUsed:", moves.insightUsed);
+      if (relationshipStage === "deep") {
+        const anyMove =
+          moves.challengeUsed ||
+          moves.patternUsed ||
+          moves.contradictionUsed ||
+          moves.insightUsed;
+        console.log(
+          "  DEEP requirement met:",
+          anyMove ? "YES" : "NO (reply only restated the situation)"
+        );
+      }
+      console.log("");
     }
 
     console.log("FINAL_REPLY", finalReply);

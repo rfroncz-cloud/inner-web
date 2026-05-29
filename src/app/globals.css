@@ -55,3 +55,8 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 .inner-onboard-fade { animation: inner-onboard-fade 0.5s ease; }
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}

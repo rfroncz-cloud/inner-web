@@ -16,6 +16,8 @@ import { useMemo } from "react";
 
 type Status = "active" | "needs_test" | "warning";
 
+export type DepthOverride = "auto" | "new" | "familiar" | "trusted" | "deep";
+
 export type DevDashboardProps = {
   // System health
   memoriesCount?: number;
@@ -29,9 +31,11 @@ export type DevDashboardProps = {
   costMaxTokens?: number;
   costMaxMemoryLines?: number;
   model?: string;
-  // User profile
-  profileConfidence?: number;
-  profileSummary?: string;
+  // Relationship depth override (dev-only)
+  depthOverride?: DepthOverride;
+  onDepthOverrideChange?: (val: DepthOverride) => void;
+  // Clears the visible chat and starts fresh (memories/profile/relationship untouched)
+  onNewTestChat?: () => void;
 };
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
@@ -59,6 +63,74 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="text-[9.5px] uppercase tracking-[0.3em] text-white/25 mb-3">
       {children}
     </p>
+  );
+}
+
+// ─── D) Relationship Depth Override ──────────────────────────────────────────
+
+const DEPTH_OPTIONS: DepthOverride[] = ["auto", "new", "familiar", "trusted", "deep"];
+
+const DEPTH_COLOR: Record<string, string> = {
+  auto:     "text-white/45",
+  new:      "text-sky-300/80",
+  familiar: "text-emerald-300/80",
+  trusted:  "text-violet-300/80",
+  deep:     "text-rose-300/80",
+};
+
+const DEPTH_PILL: Record<string, string> = {
+  auto:     "border-white/10 bg-white/[0.04] text-white/40",
+  new:      "border-sky-400/30 bg-sky-500/[0.08] text-sky-300/85",
+  familiar: "border-emerald-400/30 bg-emerald-500/[0.08] text-emerald-300/85",
+  trusted:  "border-violet-400/30 bg-violet-500/[0.08] text-violet-300/85",
+  deep:     "border-rose-400/30 bg-rose-500/[0.08] text-rose-300/85",
+};
+
+function RelationshipDepthOverride({
+  current,
+  effective,
+  onChange,
+}: {
+  current: DepthOverride;
+  effective: string;
+  onChange: (v: DepthOverride) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-3">
+        <SectionLabel>D · Relationship Level Override</SectionLabel>
+        <p className="text-[10px] text-white/25 mb-3">
+          Current Depth:{" "}
+          <span className={`font-medium ${DEPTH_COLOR[effective] ?? "text-white/55"}`}>
+            {effective.toUpperCase()}
+          </span>
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {DEPTH_OPTIONS.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(opt)}
+            className={`
+              rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.16em]
+              transition-all duration-200
+              ${current === opt
+                ? DEPTH_PILL[opt]
+                : "border-white/[0.07] bg-white/[0.02] text-white/25 hover:text-white/45 hover:border-white/15"
+              }
+            `}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+      {current !== "auto" && (
+        <p className="mt-2 text-[9.5px] text-yellow-300/50 tracking-wide">
+          ⚡ Override active — depth forced to {current.toUpperCase()} for this session
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -106,13 +178,6 @@ function buildSystemRows(p: DevDashboardProps): SystemRow[] {
       name:   "Life Events",
       status: life > 0 ? "active" : "needs_test",
       note:   life > 0 ? `${life} detected` : "Mention a birthday / goal",
-    },
-    {
-      name:   "User Profile",
-      status: (p.profileConfidence ?? 0) >= 25 ? "active" : "needs_test",
-      note:   (p.profileConfidence ?? 0) >= 25
-        ? `${p.profileConfidence}% confidence`
-        : "Needs more memories",
     },
     { name: "Voice Foundation", status: "active", note: "UI only — no mic" },
     { name: "Mobile UI",        status: "active", note: "safe-area + dvh" },
@@ -329,38 +394,6 @@ function ReleaseChecklist({ rows }: { rows: CheckRow[] }) {
   );
 }
 
-// ─── User Profile (dev view) ───────────────────────────────────────────────────
-
-function UserProfileHealth({
-  confidence,
-  summary,
-}: {
-  confidence: number;
-  summary?: string;
-}) {
-  return (
-    <div>
-      <div className="flex items-baseline justify-between mb-3">
-        <SectionLabel>D · User Profile</SectionLabel>
-        <p className="text-[10px] tabular-nums text-white/25 mb-3">{confidence}%</p>
-      </div>
-      <div className="rounded-xl border border-white/[0.05] bg-white/[0.015] px-4 py-3.5">
-        <div className="h-1 rounded-full bg-white/[0.06] overflow-hidden mb-3">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-violet-500/60 to-blue-400/60 transition-all duration-500"
-            style={{ width: `${confidence}%` }}
-          />
-        </div>
-        <p className="text-[12px] leading-relaxed text-white/50">
-          {summary && summary.trim().length > 0
-            ? summary
-            : "INNER is still getting to know the user."}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function DevDashboard(props: DevDashboardProps) {
@@ -373,8 +406,31 @@ export function DevDashboard(props: DevDashboardProps) {
     (checkRows.filter((r) => r.done).length / checkRows.length) * 100
   );
 
+  const depthOverride = props.depthOverride ?? "auto";
+  const effectiveDepth =
+    depthOverride === "auto"
+      ? (props.relationshipStage ?? "new")
+      : depthOverride;
+
   return (
     <div className="space-y-7 pb-6">
+      {/* Dev actions */}
+      {props.onNewTestChat && (
+        <div>
+          <SectionLabel>Dev Actions</SectionLabel>
+          <button
+            type="button"
+            onClick={props.onNewTestChat}
+            className="w-full rounded-xl border border-amber-400/20 bg-amber-400/[0.05] px-4 py-2.5 text-left transition hover:bg-amber-400/[0.09] active:scale-[0.98]"
+          >
+            <p className="text-[12.5px] text-amber-300/80 font-medium">New Test Chat</p>
+            <p className="text-[10px] text-amber-300/35 mt-0.5">
+              Clears conversation only · memories, profile &amp; relationship unchanged
+            </p>
+          </button>
+        </div>
+      )}
+
       {/* Top summary strip */}
       <div className="flex gap-3">
         <div className="flex-1 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-center">
@@ -400,12 +456,14 @@ export function DevDashboard(props: DevDashboardProps) {
         </div>
       </div>
 
+      <RelationshipDepthOverride
+        current={depthOverride}
+        effective={effectiveDepth}
+        onChange={props.onDepthOverrideChange ?? (() => {})}
+      />
+
       <SystemHealth rows={systemRows} />
       <CostHealth rows={costRows} mode={props.costMode ?? "cheap"} />
-      <UserProfileHealth
-        confidence={props.profileConfidence ?? 0}
-        summary={props.profileSummary}
-      />
       <ReleaseChecklist rows={checkRows} />
 
       <p className="text-center text-[9px] uppercase tracking-[0.3em] text-white/12 pt-1">

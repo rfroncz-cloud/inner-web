@@ -36,22 +36,45 @@ type ApplyParams = {
   recentAssistantMessages?: string[];
 };
 
-// Soft, open questions used (occasionally) for the gentle_question style.
+// Concrete, plain questions (v2) — what happened, not how it feels.
+// Deliberately avoids therapist phrasing.
 const GENTLE_QUESTIONS = [
-  "What's been the heaviest part?",
-  "Is it one thing, or everything at once?",
-  "What's underneath it?",
-  "How long has it been like this?",
-  "What's been pulling at you most?",
+  "What happened?",
+  "What set it off?",
+  "What's the actual thing here?",
+  "When did it start?",
+  "Then what?",
 ];
 
 // Overused / stale phrasings -> quieter equivalents (or removal).
+// v2: also rewrites therapist questions, abstract self-help stock phrases, and
+// vague "circling back" memory references into plainer language.
 const STALE_PHRASES: { re: RegExp; to: string }[] = [
+  // Repetitive feeling filler
   { re: /\bthat feeling again\b/gi, to: "that" },
   { re: /\bthat feeling\b/gi, to: "that" },
   { re: /\bI can feel that\b/gi, to: "" },
   { re: /\bI can sense that\b/gi, to: "" },
   { re: /\bthere's that weight\b/gi, to: "there's a weight" },
+
+  // Therapist-mode questions -> plain, concrete questions
+  { re: /\bhow does that make you feel\??/gi, to: "what happened?" },
+  { re: /\bhow does that feel\??/gi, to: "what happened?" },
+  { re: /\bwhat does that bring up for you\??/gi, to: "what happened?" },
+  { re: /\bhow are you sitting with that\??/gi, to: "what happened?" },
+
+  // Vague "circling back" memory references -> plain recall
+  { re: /\b(that|this) (pressure|feeling|weight) keeps circling back\b/gi, to: "you've mentioned this a few times lately" },
+  { re: /\bkeeps coming back around\b/gi, to: "has come up a few times" },
+
+  // Abstract self-help stock phrases -> grounded equivalents
+  { re: /\bholding space\b/gi, to: "" },
+  { re: /\bsit with (that|it|this)\b/gi, to: "stay with $1" },
+  { re: /\byour healing journey\b/gi, to: "this" },
+  { re: /\bthe healing process\b/gi, to: "this" },
+  { re: /\byour journey\b/gi, to: "this" },
+  { re: /\bthis process\b/gi, to: "this" },
+  { re: /\byour path\b/gi, to: "this" },
 ];
 
 const FACTUAL_STARTERS = [

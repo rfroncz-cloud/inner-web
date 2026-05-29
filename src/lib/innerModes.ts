@@ -12,7 +12,7 @@ export const INNER_MODE_CONFIG: Record<InnerMode, InnerModeConfig> = {
   fast: {
     model: "gpt-4o-mini",
     maxMessages: 3,
-    maxMemories: 2,
+    maxMemories: 6,
     maxOutputTokens: 80,
     prompt: `
 You are INNER.

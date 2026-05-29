@@ -6,6 +6,7 @@ import { MemoryTimeline } from "./MemoryTimeline";
 import { LifeEventsPanel } from "./LifeEventsPanel";
 import { DevDashboard } from "./DevDashboard";
 import { UserProfileReflection } from "./UserProfileReflection";
+import { ProfileView } from "./ProfileView";
 import { buildUserProfile, getProfileSummary } from "@/lib/userProfileEngine";
 
 const IS_DEV = process.env.NODE_ENV === "development";
@@ -14,14 +15,22 @@ const IS_DEV = process.env.NODE_ENV === "development";
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type Tab = "memory" | "timeline" | "life" | "reflection" | "patterns" | "dev";
+export type InnerViewTab =
+  | "memory"
+  | "timeline"
+  | "life"
+  | "reflection"
+  | "profile"
+  | "dev";
+
+type Tab = InnerViewTab;
 
 const BASE_TABS: { id: Tab; label: string }[] = [
-  { id: "memory", label: "Memory" },
-  { id: "timeline", label: "Timeline" },
-  { id: "life", label: "Life" },
+  { id: "memory",     label: "Memory" },
+  { id: "timeline",   label: "Timeline" },
+  { id: "life",       label: "Life" },
   { id: "reflection", label: "Reflection" },
-  { id: "patterns", label: "Patterns" },
+  { id: "profile",    label: "Profile" },
 ];
 
 const DEV_TAB: { id: Tab; label: string } = { id: "dev", label: "Dev" };
@@ -58,6 +67,8 @@ type InnerViewProps = {
   lastUserMessage?: string | null;
   loading?: boolean;
   onClearAll?: () => void;
+  // Which tab to open on mount (driven by the app's visible navigation).
+  initialTab?: InnerViewTab;
   // Dev dashboard runtime values — only used when NODE_ENV === "development".
   devProps?: {
     messagesCount?: number;
@@ -119,10 +130,12 @@ export function InnerView({
   lastUserMessage,
   loading = false,
   onClearAll,
+  initialTab = "memory",
   devProps,
 }: InnerViewProps) {
-  // Tab state is always initialised to "memory" — avoids any SSR mismatch.
-  const [activeTab, setActiveTab] = useState<Tab>("memory");
+  // Opens at the tab chosen by the app's visible navigation; users can still
+  // switch tabs within the drawer afterwards.
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
   // Life events count for the dev dashboard (derived client-side, lazy).
   // Avoid importing lifeEvents here — it's already handled inside LifeEventsPanel.
@@ -179,13 +192,8 @@ export function InnerView({
           </div>
         )}
 
-        {activeTab === "patterns" && (
-          <MemoryPanel
-            loading={loading}
-            memories={memories}
-            lastUserMessage={lastUserMessage}
-            focus="patterns"
-          />
+        {activeTab === "profile" && (
+          <ProfileView profile={userProfile} summary={profileSummary} />
         )}
 
         {IS_DEV && activeTab === "dev" && (
@@ -200,8 +208,6 @@ export function InnerView({
             costMaxTokens={devProps?.costMaxTokens}
             costMaxMemoryLines={devProps?.costMaxMemoryLines}
             model={devProps?.model}
-            profileConfidence={userProfile.profileConfidence}
-            profileSummary={profileSummary}
           />
         )}
       </div>

@@ -9,12 +9,12 @@ import {
 } from "@/lib/globalSignals";
 import { mergeMemoryLists } from "@/lib/memoryOptimizer";
 import { SideDrawer } from "./SideDrawer";
+import { ConversationList, type Conversation } from "./ConversationList";
 import { InsightsPanelContent } from "./InsightsPanelContent";
-import { InnerView } from "./InnerView";
+import { InnerView, type InnerViewTab } from "./InnerView";
 import { VoiceMode } from "./VoiceMode";
-import { DevDashboard } from "./DevDashboard";
+import { DevDashboard, type DepthOverride } from "./DevDashboard";
 import { OnboardingFlow, type OnboardingProfile } from "./OnboardingFlow";
-import { buildUserProfile, getProfileSummary } from "@/lib/userProfileEngine";
 import {
   generateTypingProfile,
   TYPING_MS_PER_CHAR,
@@ -28,7 +28,7 @@ import {
   getRelationshipStageUILabel,
   type RelationshipStage as DepthRelationshipStage,
 } from "@/lib/relationshipDepthEngine";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 type ActivePanel = "innerview" | "insights" | "voice" | "dev" | null;
 const IS_DEV = process.env.NODE_ENV === "development";
@@ -45,6 +45,9 @@ type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  // Stamped at creation time so the dev badge always reflects the depth that
+  // was active when this specific message was generated, not the current global.
+  relationshipDepth?: string;
 };
 
 type LongTermMemory = {
@@ -158,6 +161,18 @@ const [devCostMode, setDevCostMode] = useState<string>("cheap");
 const [devCostTokens, setDevCostTokens] = useState<number>(80);
 const [devCostMemoryLines, setDevCostMemoryLines] = useState<number>(2);
 const [devModel, setDevModel] = useState<string>("gpt-4o-mini");
+// Relationship Depth Override — dev panel only. "auto" = use real depth.
+const [devDepthOverride, setDevDepthOverride] = useState<DepthOverride>("auto");
+// Effective stage sent to the API — either the override or the real computed value.
+const effectiveDepthStage: DepthRelationshipStage =
+  devDepthOverride === "auto" ? relationshipDepthStage : devDepthOverride as DepthRelationshipStage;
+
+// Conversation System v1 — lightweight localStorage-backed multi-conversation.
+// Profile, memory, and relationship data are global and never touched here.
+const [conversations, setConversations] = useState<Conversation[]>([]);
+const [activeConversationId, setActiveConversationId] = useState<string>("");
+const [showConversationList, setShowConversationList] = useState(false);
+
   const [previousState, setPreviousState] = useState(innerState);
   const thinkingStates = {
     calm: "stabilizing emotional patterns",
@@ -358,6 +373,8 @@ const [relationshipStage, setRelationshipStage] = useState<
     return () => clearInterval(interval);
   }, [innerState]);
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+  // Which Inner View tab the visible navigation should open.
+  const [innerViewTab, setInnerViewTab] = useState<InnerViewTab>("memory");
   const [memoriesInitialLoad, setMemoriesInitialLoad] = useState(true);
 
   // Onboarding v1 — show the "getting to know you" flow before first chat
@@ -421,17 +438,6 @@ const [relationshipStage, setRelationshipStage] = useState<
     return saved ? JSON.parse(saved) : [];
     
   });
-
-  // User Profile Engine v1 — evolving understanding, computed locally from
-  // memories. Used by the Dev dashboard. No AI calls.
-  const devUserProfile = useMemo(
-    () => buildUserProfile(longTermMemories),
-    [longTermMemories]
-  );
-  const devProfileSummary = useMemo(
-    () => getProfileSummary(devUserProfile),
-    [devUserProfile]
-  );
 
   useEffect(() => {
     const savedRelationshipDepth =
@@ -742,6 +748,39 @@ if (savedVoiceConsciousness) {
 }
   }, []);
 
+  // Conversation System v1 — bootstrap on mount.
+  useEffect(() => {
+    const raw = localStorage.getItem("inner-conversations");
+    const activeId = localStorage.getItem("inner-active-conversation-id");
+    type StoredConv = Conversation & { messages?: Message[] };
+    let convs: StoredConv[] = [];
+    try { convs = raw ? JSON.parse(raw) : []; } catch { convs = []; }
+
+    if (convs.length === 0) {
+      // First ever load — seed with the current SEED messages.
+      const id = crypto.randomUUID();
+      const initial: StoredConv = {
+        id,
+        title: "New Chat",
+        createdAt: new Date().toISOString(),
+        messages: SEED,
+      };
+      convs = [initial];
+      localStorage.setItem("inner-conversations", JSON.stringify(convs));
+      localStorage.setItem("inner-active-conversation-id", id);
+      setActiveConversationId(id);
+      setMessages(SEED);
+    } else {
+      const id = activeId && convs.some((c) => c.id === activeId)
+        ? activeId
+        : convs[convs.length - 1].id;
+      const target = convs.find((c) => c.id === id)!;
+      setActiveConversationId(id);
+      setMessages(target.messages ?? SEED);
+    }
+    setConversations(convs.map(({ id, title, createdAt }) => ({ id, title, createdAt })));
+  }, []);
+
   function scrollToBottom() {
     requestAnimationFrame(() => {
       listRef.current?.scrollTo({
@@ -757,7 +796,24 @@ if (savedVoiceConsciousness) {
 
   useEffect(() => {
     localStorage.setItem("inner-chat-memory", JSON.stringify(messages));
-  }, [messages]);
+    // Also persist into the conversation store so switching preserves history.
+    if (activeConversationId) {
+      try {
+        const raw = localStorage.getItem("inner-conversations");
+        type StoredConv = Conversation & { messages?: Message[] };
+        const convs: StoredConv[] = raw ? JSON.parse(raw) : [];
+        const updated = convs.map((c) =>
+          c.id === activeConversationId ? { ...c, messages, title: (() => {
+            const f = messages.find((m) => m.role === "user");
+            if (!f) return c.title;
+            return f.content.trim().slice(0, 40) + (f.content.length > 40 ? "…" : "");
+          })() } : c
+        );
+        localStorage.setItem("inner-conversations", JSON.stringify(updated));
+        setConversations(updated.map(({ id, title, createdAt }) => ({ id, title, createdAt })));
+      } catch {}
+    }
+  }, [messages, activeConversationId]);
   useEffect(() => {
     localStorage.setItem(
       "inner-voice-consciousness",
@@ -1788,6 +1844,119 @@ relationshipGraph.forEach((relationship) => {
     setError(null);
   }
 
+  // Dev-only: clears the visible conversation and starts fresh, but leaves
+  // the Supabase memories, profile, and relationship data completely untouched.
+  function startNewTestChat() {
+    localStorage.removeItem("inner-chat-memory");
+    setMessages(SEED);
+    setError(null);
+  }
+
+  // ─── Conversation System v1 helpers ──────────────────────────────────────────
+
+  const LS_CONVS = "inner-conversations";
+  const LS_ACTIVE = "inner-active-conversation-id";
+
+  function loadConversations(): Conversation[] {
+    try {
+      return JSON.parse(localStorage.getItem(LS_CONVS) ?? "[]");
+    } catch {
+      return [];
+    }
+  }
+
+  function saveConversations(convs: Conversation[]) {
+    localStorage.setItem(LS_CONVS, JSON.stringify(convs));
+  }
+
+  function generateConvTitle(msgs: Message[]): string {
+    const first = msgs.find((m) => m.role === "user");
+    if (!first) return "New Chat";
+    return first.content.trim().slice(0, 40) + (first.content.length > 40 ? "…" : "");
+  }
+
+  function persistCurrentConversation(
+    id: string,
+    msgs: Message[],
+    convs: Conversation[]
+  ) {
+    const title = generateConvTitle(msgs);
+    const existing = convs.find((c) => c.id === id);
+    const updated = existing
+      ? convs.map((c) =>
+          c.id === id ? { ...c, title, messages: msgs } as Conversation & { messages: Message[] } : c
+        )
+      : [
+          ...convs,
+          {
+            id,
+            title,
+            createdAt: new Date().toISOString(),
+            messages: msgs,
+          } as Conversation & { messages: Message[] },
+        ];
+    saveConversations(updated);
+    return updated as (Conversation & { messages?: Message[] })[];
+  }
+
+  function createNewConversation() {
+    const newId = crypto.randomUUID();
+    const convs = loadConversations();
+    // Save current messages before switching.
+    if (activeConversationId) {
+      persistCurrentConversation(activeConversationId, messages, convs);
+    }
+    const newConv: Conversation & { messages: Message[] } = {
+      id: newId,
+      title: "New Chat",
+      createdAt: new Date().toISOString(),
+      messages: SEED,
+    };
+    const updated = [...(convs as (Conversation & { messages?: Message[] })[]), newConv];
+    saveConversations(updated);
+    setConversations(updated.map(({ id, title, createdAt }) => ({ id, title, createdAt })));
+    setActiveConversationId(newId);
+    localStorage.setItem(LS_ACTIVE, newId);
+    setMessages(SEED);
+    setError(null);
+  }
+
+  function switchConversation(id: string) {
+    if (id === activeConversationId) return;
+    // Save current conversation first.
+    const convs = loadConversations();
+    if (activeConversationId) {
+      persistCurrentConversation(activeConversationId, messages, convs);
+    }
+    // Load target conversation.
+    const refreshed = loadConversations() as (Conversation & { messages?: Message[] })[];
+    const target = refreshed.find((c) => c.id === id);
+    setActiveConversationId(id);
+    localStorage.setItem(LS_ACTIVE, id);
+    setMessages(target?.messages ?? SEED);
+    setError(null);
+    setConversations(refreshed.map(({ id, title, createdAt }) => ({ id, title, createdAt })));
+  }
+
+  function deleteConversation(id: string) {
+    const convs = loadConversations() as (Conversation & { messages?: Message[] })[];
+    const remaining = convs.filter((c) => c.id !== id);
+    saveConversations(remaining);
+    if (id === activeConversationId) {
+      // Switch to most recent remaining, or create fresh.
+      if (remaining.length > 0) {
+        const next = remaining[remaining.length - 1];
+        setActiveConversationId(next.id);
+        localStorage.setItem(LS_ACTIVE, next.id);
+        setMessages(next.messages ?? SEED);
+      } else {
+        createNewConversation();
+        return;
+      }
+    }
+    setConversations(remaining.map(({ id, title, createdAt }) => ({ id, title, createdAt })));
+  }
+
   // Onboarding v1 — persist the answers and feed them into the existing memory
   // flow. New memories are appended to longTermMemories, which auto-syncs to
   // Supabase via the existing /api/memory/sync effect. No extra AI calls.
@@ -2510,6 +2679,9 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
           relationshipStage,
           presenceStatus,
           voiceConsciousness,
+          ...(IS_DEV && devDepthOverride !== "auto"
+            ? { devDepthOverride }
+            : {}),
         }),
       });
 
@@ -2611,6 +2783,7 @@ if (
         id: crypto.randomUUID(),
         role: "assistant",
         content: "",
+        relationshipDepth: effectiveDepthStage,
       };
       setMessages((prev) => [...prev, assistantMessage]);
 
@@ -2723,6 +2896,9 @@ for (let i = 0; i < aiReply.length; i++) {
           relationshipStage,
           presenceStatus,
           voiceConsciousness,
+          ...(IS_DEV && devDepthOverride !== "auto"
+            ? { devDepthOverride }
+            : {}),
         }),
       });
   
@@ -2737,6 +2913,7 @@ for (let i = 0; i < aiReply.length; i++) {
         id: crypto.randomUUID(),
         role: "assistant",
         content: data.response || data.reply || "I went deeper, but the response was empty.",
+        relationshipDepth: effectiveDepthStage,
       };
   
       setMessages((prev) => [...prev, assistantMessage]);
@@ -2797,6 +2974,9 @@ for (let i = 0; i < aiReply.length; i++) {
           relationshipStage,
           presenceStatus,
           voiceConsciousness,
+          ...(IS_DEV && devDepthOverride !== "auto"
+            ? { devDepthOverride }
+            : {}),
         }),
       });
 
@@ -2810,6 +2990,7 @@ for (let i = 0; i < aiReply.length; i++) {
         id: crypto.randomUUID(),
         role: "assistant",
         content: data.response || "",
+        relationshipDepth: effectiveDepthStage,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -2888,6 +3069,18 @@ for (let i = 0; i < aiReply.length; i++) {
     }
   `}
 >
+        {/* Conversation List overlay — slides in from the left */}
+        {showConversationList && (
+          <ConversationList
+            conversations={conversations}
+            activeId={activeConversationId}
+            onSelect={switchConversation}
+            onNew={createNewConversation}
+            onDelete={deleteConversation}
+            onClose={() => setShowConversationList(false)}
+          />
+        )}
+
         <div className="shrink-0 px-7 pt-7 pb-5 border-b border-white/5 bg-white/[0.015] backdrop-blur-2xl">
         <div className="flex items-start justify-between gap-5">
   <div className="flex items-center gap-5">
@@ -3038,6 +3231,94 @@ for (let i = 0; i < aiReply.length; i++) {
   </div>
 </div>
 </div>
+
+{/* Visible primary navigation — always on screen */}
+<nav className="flex shrink-0 items-center gap-1 overflow-x-auto scrollbar-none border-b border-white/[0.06] px-4 py-2">
+  {(() => {
+    const navItems: { id: string; label: string; tab?: InnerViewTab }[] = [
+      { id: "chat", label: "Chat" },
+      { id: "memory", label: "Memory", tab: "memory" },
+      { id: "timeline", label: "Timeline", tab: "timeline" },
+      { id: "life", label: "Life", tab: "life" },
+      { id: "reflection", label: "Reflection", tab: "reflection" },
+      { id: "profile", label: "Profile", tab: "profile" },
+      ...(IS_DEV ? [{ id: "dev", label: "Dev" }] : []),
+    ];
+
+    const isActive = (id: string) => {
+      if (id === "chat") return activePanel === null;
+      if (id === "dev") return activePanel === "dev";
+      return activePanel === "innerview" && innerViewTab === (id as InnerViewTab);
+    };
+
+    const onNav = (item: { id: string; tab?: InnerViewTab }) => {
+      if (item.id === "chat") {
+        setActivePanel(null);
+        return;
+      }
+      if (item.id === "dev") {
+        setActivePanel("dev");
+        return;
+      }
+      if (item.tab) {
+        setInnerViewTab(item.tab);
+        setActivePanel("innerview");
+      }
+    };
+
+    return navItems.map((item) => {
+      const active = isActive(item.id);
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => onNav(item)}
+          className={`shrink-0 rounded-full px-3.5 py-1.5 text-[10px] uppercase tracking-[0.18em] transition-colors ${
+            active
+              ? "bg-violet-400/15 text-violet-100/90"
+              : item.id === "dev"
+              ? "text-amber-400/45 hover:text-amber-300/80"
+              : "text-white/35 hover:text-white/70"
+          }`}
+        >
+          {item.label}
+        </button>
+      );
+    });
+  })()}
+
+  {/* Conversation switcher — far right of nav */}
+  <div className="ml-auto flex items-center gap-1 pl-2 border-l border-white/[0.07]">
+    <button
+      type="button"
+      onClick={() => setShowConversationList((v) => !v)}
+      className={`
+        flex items-center gap-1.5 shrink-0 rounded-full px-3 py-1.5
+        text-[10px] uppercase tracking-[0.18em] transition-colors
+        ${showConversationList
+          ? "bg-violet-400/15 text-violet-100/90"
+          : "text-white/30 hover:text-white/65"
+        }
+      `}
+    >
+      <svg
+        viewBox="0 0 14 14"
+        fill="none"
+        className="w-3 h-3"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      >
+        <rect x="1" y="1" width="5" height="5" rx="1" />
+        <rect x="8" y="1" width="5" height="5" rx="1" />
+        <rect x="1" y="8" width="5" height="5" rx="1" />
+        <rect x="8" y="8" width="5" height="5" rx="1" />
+      </svg>
+      Chats
+    </button>
+  </div>
+</nav>
+
 <div
   ref={listRef}
   className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6 pb-4"
@@ -3114,6 +3395,30 @@ for (let i = 0; i < aiReply.length; i++) {
               {liveThinkingText}
               </p>
             </div>
+
+            {/* Dev-only relationship depth badge — reads the depth stamped at
+                generation time, not the current global, so changing the override
+                never retroactively changes past messages. */}
+            {IS_DEV && (() => {
+              const depth = message.relationshipDepth ?? effectiveDepthStage;
+              return (
+                <span className={`
+                  ml-auto shrink-0 self-start
+                  rounded-full border px-2 py-0.5
+                  text-[9px] uppercase tracking-[0.18em] font-medium
+                  ${depth === "new"
+                    ? "border-sky-400/25 text-sky-300/60"
+                    : depth === "familiar"
+                    ? "border-emerald-400/25 text-emerald-300/60"
+                    : depth === "trusted"
+                    ? "border-violet-400/25 text-violet-300/60"
+                    : "border-rose-400/25 text-rose-300/60"
+                  }
+                `}>
+                  {depth}
+                </span>
+              );
+            })()}
           </div>
         )}
 
@@ -3306,11 +3611,14 @@ INNER STATE · {transitionText}
         costMaxTokens={devCostTokens}
         costMaxMemoryLines={devCostMemoryLines}
         model={devModel}
-        profileConfidence={devUserProfile.profileConfidence}
-        profileSummary={devProfileSummary}
+        depthOverride={devDepthOverride}
+        onDepthOverrideChange={(val) => setDevDepthOverride(val)}
+        onNewTestChat={startNewTestChat}
       />
     ) : (
       <InnerView
+        key={`innerview-${innerViewTab}`}
+        initialTab={innerViewTab}
         memories={longTermMemories}
         lastUserMessage={lastUserMessage}
         loading={memoriesInitialLoad}
