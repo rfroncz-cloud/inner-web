@@ -8,6 +8,8 @@
 //   "User's name is Radek, loves wife Ela, has dog Rio, 3 cats, lives in X."
 //     -> Name: Radek / Wife: Ela / Dog: Rio / Cats: 3 / Location: X
 
+import { normalizeFamilyName } from "@/lib/familyEntityNormalization";
+
 export type StructuredFact = {
   type:
     | "name"
@@ -40,6 +42,9 @@ type Rule = {
   // Reject the match if the cleaned value hits one of these words — keeps
   // generic "love" rules from swallowing "loves wife Ela".
   rejectIfValueIncludes?: string[];
+  // When set, the captured value is a family member's name and is normalized to
+  // its canonical (nominative) form for this role — e.g. "Kevina" -> "Kevin".
+  normalizeFamilyRole?: string;
 };
 
 function cleanValue(value: string): string {
@@ -113,6 +118,7 @@ const RULES: Rule[] = [
     label: "Wife",
     confidence: 90,
     transform: titleName,
+    normalizeFamilyRole: "wife",
     regexes: [
       new RegExp(`\\bwife\\s+(?:is\\s+|named\\s+)?([${NAME}]+)`, "gi"),
       new RegExp(`\\bżona\\s+(?:ma na imię\\s+)?([${NAME}]+)`, "gi"),
@@ -124,6 +130,7 @@ const RULES: Rule[] = [
     label: "Husband",
     confidence: 90,
     transform: titleName,
+    normalizeFamilyRole: "husband",
     regexes: [
       new RegExp(`\\bhusband\\s+(?:is\\s+|named\\s+)?([${NAME}]+)`, "gi"),
       new RegExp(`\\bmąż\\s+(?:ma na imię\\s+)?([${NAME}]+)`, "gi"),
@@ -135,6 +142,7 @@ const RULES: Rule[] = [
     label: "Son",
     confidence: 90,
     transform: titleName,
+    normalizeFamilyRole: "son",
     regexes: [
       new RegExp(`\\bson\\s+(?:is\\s+|named\\s+)?([${NAME}]+)`, "gi"),
       new RegExp(`\\bsyn\\s+(?:ma na imię\\s+)?([${NAME}]+)`, "gi"),
@@ -146,6 +154,7 @@ const RULES: Rule[] = [
     label: "Daughter",
     confidence: 90,
     transform: titleName,
+    normalizeFamilyRole: "daughter",
     regexes: [
       new RegExp(`\\bdaughter\\s+(?:is\\s+|named\\s+)?([${NAME}]+)`, "gi"),
       new RegExp(`\\bcórka\\s+(?:ma na imię\\s+)?([${NAME}]+)`, "gi"),
@@ -288,6 +297,12 @@ export function extractStructuredFacts(memoryText: string): StructuredFact[] {
 
         if (!value) continue;
         if (value.length < 1) continue;
+
+        // Family Entity Normalization v1 — collapse Polish grammatical variants
+        // ("Kevina" -> "Kevin", "Eli" -> "Ela") onto the canonical name.
+        if (rule.normalizeFamilyRole) {
+          value = normalizeFamilyName(value, rule.normalizeFamilyRole);
+        }
 
         if (
           rule.rejectIfValueIncludes &&

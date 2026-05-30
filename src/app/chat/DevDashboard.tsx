@@ -18,6 +18,87 @@ type Status = "active" | "needs_test" | "warning";
 
 export type DepthOverride = "auto" | "new" | "familiar" | "trusted" | "deep";
 
+// ─── Test Personas ─────────────────────────────────────────────────────────────
+
+export type TestPersona =
+  | "none"
+  | "user_a_family"
+  | "user_b_founder"
+  | "user_c_student"
+  | "user_d_athlete"
+  | "user_e_lonely";
+
+export type PersonaInfo = {
+  id: TestPersona;
+  label: string;
+  shortLabel: string;
+  description: string;
+  tags: string[];
+};
+
+export const PERSONA_LIST: PersonaInfo[] = [
+  {
+    id: "none",
+    label: "None",
+    shortLabel: "None",
+    description: "Real user — no persona active.",
+    tags: [],
+  },
+  {
+    id: "user_a_family",
+    label: "User A — Family",
+    shortLabel: "Family",
+    description: "wife, child, pets, family-first values",
+    tags: ["family", "children", "pets", "values"],
+  },
+  {
+    id: "user_b_founder",
+    label: "User B — Founder",
+    shortLabel: "Founder",
+    description: "startup, overload, ambition, balance problems",
+    tags: ["startup", "overload", "ambition", "balance"],
+  },
+  {
+    id: "user_c_student",
+    label: "User C — Student",
+    shortLabel: "Student",
+    description: "exams, future anxiety, confidence issues",
+    tags: ["exams", "anxiety", "confidence", "future"],
+  },
+  {
+    id: "user_d_athlete",
+    label: "User D — Athlete",
+    shortLabel: "Athlete",
+    description: "training, diet, injury, discipline",
+    tags: ["training", "diet", "injury", "discipline"],
+  },
+  {
+    id: "user_e_lonely",
+    label: "User E — Lonely",
+    shortLabel: "Lonely",
+    description: "loneliness, attachment, fear of rejection",
+    tags: ["loneliness", "attachment", "rejection", "isolation"],
+  },
+];
+
+export const PERSONA_COLOR: Record<TestPersona, string> = {
+  none:           "border-white/[0.07] bg-white/[0.02] text-white/25",
+  user_a_family:  "border-rose-400/30   bg-rose-500/[0.08]   text-rose-300/85",
+  user_b_founder: "border-amber-400/30  bg-amber-500/[0.08]  text-amber-300/85",
+  user_c_student: "border-sky-400/30    bg-sky-500/[0.08]    text-sky-300/85",
+  user_d_athlete: "border-emerald-400/30 bg-emerald-500/[0.08] text-emerald-300/85",
+  user_e_lonely:  "border-violet-400/30 bg-violet-500/[0.08] text-violet-300/85",
+};
+
+export const PERSONA_BANNER_COLOR: Record<TestPersona, string> = {
+  none:           "",
+  user_a_family:  "border-rose-400/20   bg-rose-500/[0.07]   text-rose-300/70",
+  user_b_founder: "border-amber-400/20  bg-amber-500/[0.07]  text-amber-300/70",
+  user_c_student: "border-sky-400/20    bg-sky-500/[0.07]    text-sky-300/70",
+  user_d_athlete: "border-emerald-400/20 bg-emerald-500/[0.07] text-emerald-300/70",
+  user_e_lonely:  "border-violet-400/20 bg-violet-500/[0.07] text-violet-300/70",
+};
+
 export type DevDashboardProps = {
   // System health
   memoriesCount?: number;
@@ -36,6 +117,9 @@ export type DevDashboardProps = {
   onDepthOverrideChange?: (val: DepthOverride) => void;
   // Clears the visible chat and starts fresh (memories/profile/relationship untouched)
   onNewTestChat?: () => void;
+  // Test persona — local UI state only, no DB writes, no memory changes
+  testPersona?: TestPersona;
+  onTestPersonaChange?: (persona: TestPersona) => void;
 };
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
@@ -63,6 +147,69 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="text-[9.5px] uppercase tracking-[0.3em] text-white/25 mb-3">
       {children}
     </p>
+  );
+}
+
+// ─── E) Test Persona Selector ────────────────────────────────────────────────
+
+function TestPersonaSelector({
+  current,
+  onChange,
+}: {
+  current: TestPersona;
+  onChange: (v: TestPersona) => void;
+}) {
+  const active = PERSONA_LIST.find((p) => p.id === current);
+
+  return (
+    <div>
+      <SectionLabel>E · Test Persona</SectionLabel>
+
+      {/* Pill row */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        {PERSONA_LIST.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onChange(p.id)}
+            className={`
+              rounded-full border px-3 py-1 text-[11px] tracking-[0.12em]
+              transition-all duration-200
+              ${current === p.id
+                ? PERSONA_COLOR[p.id]
+                : "border-white/[0.07] bg-white/[0.02] text-white/25 hover:text-white/45 hover:border-white/15"
+              }
+            `}
+          >
+            {p.shortLabel}
+          </button>
+        ))}
+      </div>
+
+      {/* Helper description — shown only when a persona is active */}
+      {active && active.id !== "none" && (
+        <div className={`rounded-xl border px-4 py-3 ${PERSONA_COLOR[active.id]}`}>
+          <p className="text-[11px] font-medium mb-1">{active.label}</p>
+          <p className="text-[10.5px] opacity-75 mb-2">{active.description}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {active.tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full border border-current/20 px-2 py-0.5 text-[9.5px] opacity-55 tracking-wide"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {current !== "none" && (
+        <p className="mt-2 text-[9.5px] text-amber-300/50 tracking-wide">
+          ⚡ Persona active — testing context only · no DB changes · no memory changes
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -455,6 +602,11 @@ export function DevDashboard(props: DevDashboardProps) {
           <p className="text-[18px] font-light text-white/75">{donePct}%</p>
         </div>
       </div>
+
+      <TestPersonaSelector
+        current={props.testPersona ?? "none"}
+        onChange={props.onTestPersonaChange ?? (() => {})}
+      />
 
       <RelationshipDepthOverride
         current={depthOverride}

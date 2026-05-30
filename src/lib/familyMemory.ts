@@ -7,6 +7,15 @@
 //
 // Pure TypeScript. No AI calls, no embeddings, no vector search.
 
+import {
+  normalizeEntityType,
+  genderForEntityType,
+  familyNameStem,
+  pickCanonicalName,
+  mergeFamilyEntities,
+  type CanonicalFamilyEntity,
+} from "@/lib/familyEntityNormalization";
+
 export type FamilyMemory = {
   memory?: string;
   text?: string;
@@ -14,6 +23,10 @@ export type FamilyMemory = {
   type?: string;
   entityName?: string;
   entityType?: string;
+  // Family Entity Normalization v1 — populated by dedupeFamilyEntities so
+  // downstream retrieval always works off the canonical entity, not a variant.
+  canonicalName?: string;
+  aliases?: string[];
   [key: string]: any;
 };
 
@@ -154,16 +167,11 @@ export function buildPetNote(memories: FamilyMemory[]): string {
   return `I also remember your pets separately: ${unique.join(", ")}.`;
 }
 
-// ─── Duplicate entity normalization ─────────────────────────────────────────────
-
-// Strip common Polish case endings so inflected forms map to one stem.
-// e.g. "kevina" -> "kevin", "córki" -> "córk".
-function nameStem(name: string): string {
-  let s = name.toLowerCase().replace(/[^a-ząćęłńóśźż]/gi, "");
-  // Remove trailing inflection vowels/suffixes (longest first).
-  s = s.replace(/(owie|ami|owi|em|ie|ą|ę|y|a|i|e|u|o)$/u, "");
-  return s;
-}
+// ─── Family Entity Normalization v1 ──────────────────────────────────────────
+// The same person can appear under many Polish grammatical forms (Kevin /
+// Kevina / Kevinowi / Kevinem). We fold every variant onto one canonical entity
+// before retrieval, so the family list never double-counts a person and always
+// surfaces the canonical (nominative) name. See familyEntityNormalization.ts.
 
 // Try to pull the proper name out of a memory like "User's son is named Kevin".
 function extractName(text: string): string | null {
@@ -180,49 +188,154 @@ function extractName(text: string): string | null {
   return null;
 }
 
+const PL_ROLE_WORDS = [
+  "wife", "husband", "son", "daughter", "mother", "father", "brother",
+  "sister", "grandmother", "grandfather",
+  "żona", "zona", "mąż", "maz", "syn", "córka", "corka", "matka", "mama",
+  "ojciec", "tata", "brat", "siostra", "babcia", "dziadek",
+];
+
+/** Canonical role for a memory, from its entityType or its text. */
 function roleKey(m: FamilyMemory): string {
-  const entityType = (m.entityType ?? "").toLowerCase();
-  if (FAMILY_ENTITY_TYPES.has(entityType)) return entityType;
+  const fromType = normalizeEntityType(m.entityType);
+  if (fromType !== "family") return fromType;
   const lower = getText(m).toLowerCase();
-  for (const role of ["wife", "husband", "son", "daughter", "mother", "father",
-    "brother", "sister", "żona", "mąż", "syn", "córka"]) {
-    if (lower.includes(role)) return role;
+  for (const role of PL_ROLE_WORDS) {
+    if (lower.includes(role)) return normalizeEntityType(role);
   }
-  return "other";
+  return "family";
+}
+
+/** Replace the surface name in a memory's text with its canonical form. */
+function rewriteNameInText(text: string, surface: string, canonical: string): string {
+  if (!surface || !canonical || surface === canonical) return text;
+  const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(escaped, "iu"), canonical);
 }
 
 /**
- * Collapse duplicate family entities. Two memories about the same role whose
- * extracted names share a stem (e.g. "Kevin" / "Kevina") are treated as the
- * same person — only the first (or longest-named) is kept.
+ * Build canonical family entities (entityType, canonicalName, aliases) from a
+ * set of memories — every grammatical variant of a person merged into one.
+ */
+export function buildFamilyEntities(
+  memories: FamilyMemory[]
+): CanonicalFamilyEntity[] {
+  const inputs = memories
+    .filter(isFamilyMemory)
+    .map((m) => ({
+      name: m.entityName ?? extractName(getText(m)) ?? "",
+      entityType: roleKey(m),
+    }))
+    .filter((i) => i.name);
+  return mergeFamilyEntities(inputs);
+}
+
+/**
+ * Collapse duplicate family entities. Memories about the same role whose names
+ * are grammatical variants (e.g. "Kevin" / "Kevina" / "Kevinowi") are treated
+ * as one person: a single memory is kept, its name rewritten to the canonical
+ * (nominative) form, and every variant retained on `aliases`.
  */
 export function dedupeFamilyEntities(memories: FamilyMemory[]): FamilyMemory[] {
-  const seen = new Map<string, FamilyMemory>(); // key -> kept memory
-  const result: FamilyMemory[] = [];
+  type Bucket = { name: string; aliases: string[] };
+  const buckets = new Map<string, Bucket>();
+  const kept = new Map<string, FamilyMemory>();
+  const order: string[] = [];
 
   for (const m of memories) {
     const text = getText(m).trim();
     if (!text) continue;
 
     const role = roleKey(m);
-    const name = m.entityName ?? extractName(text);
-    const key = name ? `${role}:${nameStem(name)}` : `text:${text.toLowerCase()}`;
+    const name = m.entityName ?? extractName(text) ?? "";
+    const key = name ? `${role}:${familyNameStem(name)}` : `text:${text.toLowerCase()}`;
 
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, m);
+    const bucket = buckets.get(key);
+    if (!bucket) {
+      buckets.set(key, { name, aliases: name ? [name] : [] });
+      kept.set(key, m);
+      order.push(key);
+    } else if (name && !bucket.aliases.some((a) => a.toLowerCase() === name.toLowerCase())) {
+      bucket.aliases.push(name);
+    }
+  }
+
+  return order.map((key) => {
+    const m = kept.get(key)!;
+    const bucket = buckets.get(key)!;
+    const role = roleKey(m);
+    if (!bucket.name) return m;
+
+    const canonicalName = pickCanonicalName(bucket.aliases, genderForEntityType(role));
+    const surface = m.entityName ?? extractName(getText(m)) ?? bucket.name;
+    return {
+      ...m,
+      entityType: role,
+      entityName: canonicalName,
+      canonicalName,
+      aliases: bucket.aliases,
+      memory: rewriteNameInText(getText(m), surface, canonicalName),
+    };
+  });
+}
+
+/**
+ * Family Entity Deduplication v1 — collapse duplicate family people inside a
+ * FULL memory pool (family + non-family), in place. Duplicate persons (same
+ * role + same canonical name, e.g. "Kevin" / "Kevina") are merged: the first
+ * occurrence survives with its name rewritten to canonical, later duplicates
+ * are dropped. Non-family memories and nameless family memories are preserved
+ * in their original positions.
+ *
+ * Use this BEFORE any retrieval / summary so the model never receives one
+ * person twice. Pure local logic — no DB writes, no AI calls.
+ */
+export function dedupeFamilyInMemoryPool(memories: FamilyMemory[]): FamilyMemory[] {
+  const family = memories.filter(isFamilyMemory);
+  if (family.length < 2) return memories;
+
+  // Pass 1 — gather every alias per (role + stem) so the canonical name is
+  // chosen from all variants, not just the first one seen.
+  const aliasGroups = new Map<string, string[]>();
+  for (const m of family) {
+    const name = m.entityName ?? extractName(getText(m)) ?? "";
+    if (!name) continue;
+    const key = `${roleKey(m)}:${familyNameStem(name)}`;
+    const aliases = aliasGroups.get(key) ?? [];
+    if (!aliases.some((a) => a.toLowerCase() === name.toLowerCase())) {
+      aliases.push(name);
+    }
+    aliasGroups.set(key, aliases);
+  }
+
+  // Pass 2 — rebuild the pool, keeping one canonicalized memory per person.
+  const emitted = new Set<string>();
+  const result: FamilyMemory[] = [];
+  for (const m of memories) {
+    if (!isFamilyMemory(m)) {
       result.push(m);
       continue;
     }
-
-    // Duplicate entity — keep the variant with the longer proper name (more
-    // canonical, e.g. prefer the spelled-out form), otherwise keep existing.
-    const existingName = existing.entityName ?? extractName(getText(existing)) ?? "";
-    if ((name ?? "").length > existingName.length) {
-      const idx = result.indexOf(existing);
-      if (idx >= 0) result[idx] = m;
-      seen.set(key, m);
+    const name = m.entityName ?? extractName(getText(m)) ?? "";
+    if (!name) {
+      result.push(m); // family memory with no extractable person — keep as-is
+      continue;
     }
+    const role = roleKey(m);
+    const key = `${role}:${familyNameStem(name)}`;
+    if (emitted.has(key)) continue; // duplicate person — drop
+    emitted.add(key);
+
+    const aliases = aliasGroups.get(key) ?? [name];
+    const canonicalName = pickCanonicalName(aliases, genderForEntityType(role));
+    result.push({
+      ...m,
+      entityType: role,
+      entityName: canonicalName,
+      canonicalName,
+      aliases,
+      memory: rewriteNameInText(getText(m), name, canonicalName),
+    });
   }
 
   return result;

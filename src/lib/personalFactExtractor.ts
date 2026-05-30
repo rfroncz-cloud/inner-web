@@ -1,3 +1,5 @@
+import { normalizeFamilyName } from "@/lib/familyEntityNormalization";
+
 export type ExtractedFact = {
   memory: string;
   category: string;
@@ -42,7 +44,7 @@ export function extractPersonalFacts(text: string): ExtractedFact[] {
         new RegExp(`moja żona ma na imię ([${nameChars}]+)`, "i"),
         new RegExp(`moja zona ma na imie ([${nameChars}]+)`, "i"),
       ],
-      format: (v: string) => `User's wife is ${v}.`,
+      format: (v: string) => `User's wife is ${normalizeFamilyName(v, "wife")}.`,
     },
     {
       category: "family",
@@ -52,7 +54,7 @@ export function extractPersonalFacts(text: string): ExtractedFact[] {
         new RegExp(`mój mąż ma na imię ([${nameChars}]+)`, "i"),
         new RegExp(`moj maz ma na imie ([${nameChars}]+)`, "i"),
       ],
-      format: (v: string) => `User's husband is ${v}.`,
+      format: (v: string) => `User's husband is ${normalizeFamilyName(v, "husband")}.`,
     },
     {
       category: "family",
@@ -63,7 +65,7 @@ export function extractPersonalFacts(text: string): ExtractedFact[] {
         new RegExp(`mój syn ma na imię ([${nameChars}]+)`, "i"),
         new RegExp(`moj syn ma na imie ([${nameChars}]+)`, "i"),
       ],
-      format: (v: string) => `User's son is ${v}.`,
+      format: (v: string) => `User's son is ${normalizeFamilyName(v, "son")}.`,
     },
     {
       category: "family",
@@ -74,7 +76,7 @@ export function extractPersonalFacts(text: string): ExtractedFact[] {
         new RegExp(`moja córka ma na imię ([${nameChars}]+)`, "i"),
         new RegExp(`moja corka ma na imie ([${nameChars}]+)`, "i"),
       ],
-      format: (v: string) => `User's daughter is ${v}.`,
+      format: (v: string) => `User's daughter is ${normalizeFamilyName(v, "daughter")}.`,
     },
     {
       category: "pet",

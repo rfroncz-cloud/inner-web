@@ -13,7 +13,13 @@ import { ConversationList, type Conversation } from "./ConversationList";
 import { InsightsPanelContent } from "./InsightsPanelContent";
 import { InnerView, type InnerViewTab } from "./InnerView";
 import { VoiceMode } from "./VoiceMode";
-import { DevDashboard, type DepthOverride } from "./DevDashboard";
+import {
+  DevDashboard,
+  type DepthOverride,
+  type TestPersona,
+  PERSONA_LIST,
+  PERSONA_BANNER_COLOR,
+} from "./DevDashboard";
 import { OnboardingFlow, type OnboardingProfile } from "./OnboardingFlow";
 import {
   generateTypingProfile,
@@ -163,6 +169,8 @@ const [devCostMemoryLines, setDevCostMemoryLines] = useState<number>(2);
 const [devModel, setDevModel] = useState<string>("gpt-4o-mini");
 // Relationship Depth Override — dev panel only. "auto" = use real depth.
 const [devDepthOverride, setDevDepthOverride] = useState<DepthOverride>("auto");
+// Test Persona — local UI state only. No DB writes. No memory/profile changes.
+const [testPersona, setTestPersona] = useState<TestPersona>("none");
 // Effective stage sent to the API — either the override or the real computed value.
 const effectiveDepthStage: DepthRelationshipStage =
   devDepthOverride === "auto" ? relationshipDepthStage : devDepthOverride as DepthRelationshipStage;
@@ -2682,6 +2690,9 @@ if (presenceStatus === "away" || presenceStatus === "quiet") {
           ...(IS_DEV && devDepthOverride !== "auto"
             ? { devDepthOverride }
             : {}),
+          ...(IS_DEV && testPersona !== "none"
+            ? { testPersona }
+            : {}),
         }),
       });
 
@@ -2899,6 +2910,9 @@ for (let i = 0; i < aiReply.length; i++) {
           ...(IS_DEV && devDepthOverride !== "auto"
             ? { devDepthOverride }
             : {}),
+          ...(IS_DEV && testPersona !== "none"
+            ? { testPersona }
+            : {}),
         }),
       });
   
@@ -2976,6 +2990,9 @@ for (let i = 0; i < aiReply.length; i++) {
           voiceConsciousness,
           ...(IS_DEV && devDepthOverride !== "auto"
             ? { devDepthOverride }
+            : {}),
+          ...(IS_DEV && testPersona !== "none"
+            ? { testPersona }
             : {}),
         }),
       });
@@ -3474,6 +3491,29 @@ INNER STATE · {transitionText}
   )}
 </div>
 
+        {/* Test Persona banner — dev mode only, shown above input when a persona is active */}
+        {IS_DEV && testPersona !== "none" && (() => {
+          const persona = PERSONA_LIST.find((p) => p.id === testPersona);
+          if (!persona) return null;
+          return (
+            <div className={`shrink-0 mx-4 sm:mx-5 mb-1 rounded-2xl border px-4 py-2 flex items-center gap-3 ${PERSONA_BANNER_COLOR[testPersona]}`}>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.22em] opacity-50 mb-0.5">Test Persona</p>
+                <p className="text-[12px] font-medium truncate">{persona.label}</p>
+                <p className="text-[10px] opacity-55 truncate">{persona.description}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTestPersona("none")}
+                className="shrink-0 text-[10px] opacity-40 hover:opacity-70 transition-opacity px-2 py-1 rounded-lg"
+                aria-label="Clear test persona"
+              >
+                ✕
+              </button>
+            </div>
+          );
+        })()}
+
         <form
           onSubmit={handleSubmit}
           className="shrink-0 px-4 sm:px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-black/75 to-transparent"
@@ -3613,6 +3653,8 @@ INNER STATE · {transitionText}
         model={devModel}
         depthOverride={devDepthOverride}
         onDepthOverrideChange={(val) => setDevDepthOverride(val)}
+        testPersona={testPersona}
+        onTestPersonaChange={(val) => setTestPersona(val)}
         onNewTestChat={startNewTestChat}
       />
     ) : (

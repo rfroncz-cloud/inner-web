@@ -82,9 +82,12 @@ import {
 import {
   isFamilyQuery,
   isPetQuery,
+  isFamilyMemory,
   getAllFamilyMemories,
   getAllPetMemories,
   buildPetNote,
+  buildFamilyEntities,
+  dedupeFamilyInMemoryPool,
 } from "@/lib/familyMemory";
 import { shouldDeleteMemory } from "@/lib/memoryCleanup";
 import { resolvePersonalFact } from "@/lib/personalFactsResolver";
@@ -93,6 +96,12 @@ import { scoreEmotionalMemory } from "@/lib/emotionalMemoryScoring";
 import { rankMemories } from "@/lib/memoryRanking";
 import { calculateRelationshipUpdate } from "@/lib/relationshipEngine";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
+import {
+  getPersonaSpec,
+  buildPersonaPrompt,
+  shouldIsolatePersonaMemory,
+  type TestPersonaId,
+} from "@/lib/testPersonaContext";
 import {
   compressUserProfile,
   shouldSaveMemory,
@@ -307,6 +316,9 @@ export async function POST(req: Request) {
       // When present, replaces the calculated stage for this request only.
       // No DB changes, no memory changes.
       devDepthOverride,
+      // Dev-only test persona — shapes the system prompt for this request only.
+      // Never written to Supabase. Never affects real memories or profile.
+      testPersona,
     } = await req.json();
     const personalityStylePrompt = `
 DYNAMIC PERSONALITY STYLE:
@@ -366,6 +378,22 @@ Do not sound like therapy content.
       rawMessage: userMessage,
     });
     logCostMode(costMode, { userTier: "free" });
+
+    // Test Persona Context v1 — dev only. Builds a prompt block that shapes
+    // INNER's responses as if speaking with this type of person. No DB writes,
+    // no memory saves, no profile changes — exists only for this request.
+    const personaSpec = getPersonaSpec(testPersona as TestPersonaId | undefined);
+    const personaPromptBlock = buildPersonaPrompt(testPersona as TestPersonaId | undefined);
+
+    console.log("\nTEST PERSONA:");
+    if (personaSpec) {
+      console.log("  active:", personaSpec.label);
+      console.log("  traits:");
+      personaSpec.traits.forEach((t) => console.log(`    - ${t}`));
+    } else {
+      console.log("  active: none");
+    }
+    // Note: memory isolation decision is logged below after allMemories is built.
 
     // Cap config values using cost mode limits (never exceed what mode allows).
     // We keep `config` read-only and carry effective caps as separate constants.
@@ -626,11 +654,57 @@ if (isNameQuestion) {
 }
     
     // 2. Połącz memories z frontu + memories z Supabase
-    const allMemories = [
+    let allMemories = [
       ...activeDbMemories,
       ...safeMemories,
     ];
-    
+
+    // Persona Memory Isolation v1 — when a test persona is active and the user
+    // asks an identity-summary question ("tell me everything you know about me"),
+    // suppress all real global memories so INNER answers from persona context
+    // and current session messages only. No DB writes, no AI calls.
+    const personaIsolationActive = shouldIsolatePersonaMemory(
+      testPersona as TestPersonaId | undefined,
+      userMessage
+    );
+    if (personaIsolationActive) {
+      allMemories = [];
+      console.log(
+        `\nPERSONA ISOLATION: real memories suppressed for identity query (persona: ${testPersona})\n`
+      );
+    }
+
+    // Family Entity Deduplication v1 — old DB records may already hold the same
+    // person under several Polish case forms (e.g. "Kevin" + "Kevina"). Collapse
+    // them BEFORE any retrieval/summary so INNER never reports one person twice
+    // regardless of what the user asked ("family?", "tell me everything", etc.).
+    // No DB writes, no record deletion, no AI.
+    {
+      const rawFamily = allMemories
+        .filter(isFamilyMemory)
+        .map((m: any) => (m.memory ?? m.text ?? "").toString());
+      const mergedEntities = buildFamilyEntities(allMemories as any[]);
+
+      allMemories = dedupeFamilyInMemoryPool(allMemories as any[]) as typeof allMemories;
+
+      const mergedFamily = allMemories
+        .filter(isFamilyMemory)
+        .map((m: any) => (m.memory ?? m.text ?? "").toString());
+
+      console.log("\nFAMILY DEDUP:");
+      console.log("  raw:", rawFamily);
+      console.log(
+        "  canonical:",
+        mergedEntities.map(
+          (e) => `${e.entityType}: ${e.canonicalName} [${e.aliases.join(", ")}]`
+        )
+      );
+      console.log("  merged:", mergedFamily);
+      console.log(
+        `  collapsed ${rawFamily.length} family record(s) -> ${mergedEntities.length} unique person(s)\n`
+      );
+    }
+
     // 3. Emotional Memory Ranking Engine
     const rankedMemories = rankMemories(allMemories, Math.max(config.maxMemories, 12));
     
@@ -1301,9 +1375,17 @@ Response depth behavior:
 `.trim();
 
 
+    const personaIsolationInstruction = personaIsolationActive
+      ? `PERSONA TEST MODE — MEMORY ISOLATION:
+You have no stored memories about this person. Do NOT mention family, past conversations, or any personal facts you might know from other sessions.
+Answer only from the context provided above and what was said in this conversation.`
+      : "";
+
     const finalSystemContent = `
 ${systemPrompt}
 
+${personaPromptBlock ? `${personaPromptBlock}\n` : ""}
+${personaIsolationInstruction ? `${personaIsolationInstruction}\n` : ""}
 ${selectedMode === "fast" || selectedMode === "core" ? "" : profileContext}
 
 ${patternInsightContext}
