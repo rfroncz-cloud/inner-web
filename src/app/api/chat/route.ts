@@ -95,6 +95,10 @@ import { findSimilarMemory } from "@/lib/memoryReinforcement";
 import { scoreEmotionalMemory } from "@/lib/emotionalMemoryScoring";
 import { rankMemories } from "@/lib/memoryRanking";
 import { calculateRelationshipUpdate } from "@/lib/relationshipEngine";
+import {
+  shouldSnapshotRelationship,
+  buildRelationshipSnapshot,
+} from "@/lib/relationshipPatternHistory";
 import { getInnerModeConfig, type InnerMode } from "@/lib/innerModes";
 import {
   getPersonaSpec,
@@ -1786,6 +1790,62 @@ Format:
 
         console.log("RELATIONSHIP INSERT DATA:", relationshipInsertData);
         console.log("RELATIONSHIP INSERT ERROR:", relationshipInsertError);
+      }
+    }
+
+    // Relationship Pattern History v1 — snapshot current state when a
+    // meaningful change occurred. One Supabase insert at most per 24 h.
+    if (memoryCandidate) {
+      const { data: freshRelState } = await supabase
+        .from("inner_relationship_state")
+        .select("trust_level,closeness_level,attachment_level,interaction_count,last_emotion_mode")
+        .eq("user_id", "local-user")
+        .maybeSingle();
+
+      if (freshRelState) {
+        const { data: lastSnapshot } = await supabase
+          .from("inner_relationship_history")
+          .select("trust_level,relationship_stage,created_at")
+          .eq("user_id", "local-user")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const { should, reason } = shouldSnapshotRelationship(
+          {
+            trust_level: freshRelState.trust_level ?? 0,
+            closeness_level: freshRelState.closeness_level ?? 0,
+            attachment_level: freshRelState.attachment_level ?? 0,
+            relationship_stage: relationshipStage,
+            interaction_count: freshRelState.interaction_count ?? 0,
+            emotional_trend: freshRelState.last_emotion_mode ?? detectedEmotion.mode,
+            recurring_themes: relationshipPatternProfile.dominantPatterns,
+          },
+          lastSnapshot ?? null
+        );
+
+        if (should) {
+          const snapshot = buildRelationshipSnapshot("local-user", {
+            trust_level: freshRelState.trust_level ?? 0,
+            closeness_level: freshRelState.closeness_level ?? 0,
+            attachment_level: freshRelState.attachment_level ?? 0,
+            relationship_stage: relationshipStage,
+            interaction_count: freshRelState.interaction_count ?? 0,
+            emotional_trend: freshRelState.last_emotion_mode ?? detectedEmotion.mode,
+            recurring_themes: relationshipPatternProfile.dominantPatterns,
+          });
+          snapshot.snapshot_reason = reason;
+
+          const { error: historyInsertError } = await supabase
+            .from("inner_relationship_history")
+            .insert(snapshot);
+
+          console.log(
+            "RELATIONSHIP_HISTORY_SNAPSHOT:",
+            reason,
+            historyInsertError ?? "ok"
+          );
+        }
       }
     }
 
