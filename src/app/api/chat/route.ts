@@ -10,6 +10,7 @@ import {
 import {
   detectContradiction,
   getContradictionInstruction,
+  detectMemoryContradiction,
 } from "@/lib/contradictionEngine";
 import {
   extractExplicitMemory,
@@ -1683,6 +1684,24 @@ Format:
       userMessage
     );
 
+    // Contradiction Engine v2 — check new memory against existing facts before saving.
+    // Does NOT block saving; only flags conflict and logs.
+    let memoryHasConflict = false;
+    if (memoryCandidate) {
+      const contradictionCheck = detectMemoryContradiction(
+        memoryCandidate.memory,
+        activeDbMemories
+      );
+      if (contradictionCheck.hasConflict) {
+        memoryHasConflict = true;
+        console.warn(
+          "⚠️ CONTRADICTION DETECTED:",
+          contradictionCheck.reason,
+          "| conflicting ids:", contradictionCheck.conflictingMemoryIds
+        );
+      }
+    }
+
     if (memoryCandidate) {
       if (similarMemory?.id) {
         const newRepeatCount = (similarMemory.repeat_count || 1) + 1;
@@ -1736,6 +1755,7 @@ Format:
               relationship_impact: memoryCandidate.relationship_impact,
               category: memoryCandidate.category,
               repeat_count: 1,
+              has_conflict: memoryHasConflict,
               created_at: new Date().toISOString(),
               last_accessed: new Date().toISOString(),
             })
