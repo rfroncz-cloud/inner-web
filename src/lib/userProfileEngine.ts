@@ -410,14 +410,22 @@ export function prettyStyleLabel(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// User Profile Engine v2
+// User Profile Engine v2.2
 // ---------------------------------------------------------------------------
 // Complete profile builder from stored memories. Deterministic only: category,
 // type and keyword mapping. No AI calls, embeddings, or model classification.
+//
+// v2.2 changes:
+// - Structured family entity extraction (no more "son: named" fragments)
+// - Coherent family summary paragraph
+// - Projects section
+// - Aggressive deduplication by role/name
+// - Goals pulled from category=project/goal in addition to trigger phrases
 
 export type ProfileV2Section =
   | "family"
   | "goals"
+  | "projects"
   | "values"
   | "personality"
   | "communicationStyle"
@@ -432,8 +440,10 @@ export type ProfileV2Item = {
 };
 
 export type UserProfileV2 = {
+  familySummary: string;
   family: ProfileV2Item[];
   goals: ProfileV2Item[];
+  projects: ProfileV2Item[];
   values: ProfileV2Item[];
   personality: ProfileV2Item[];
   communicationStyle: ProfileV2Item[];
@@ -528,44 +538,199 @@ function itemize(bucket: ProfileBucket, limit: number): ProfileV2Item[] {
     .slice(0, limit);
 }
 
-// Extract a clean human-readable label from a family memory string.
-// "User's wife is Ania." → "wife: Ania"
-// Returns null when the raw string is too long / unrecognisable.
-const FAMILY_ROLE_PATTERNS: [RegExp, string][] = [
-  [/user'?s?\s+wife\s+is\s+([^\s.,]+)/i, "wife"],
-  [/user'?s?\s+husband\s+is\s+([^\s.,]+)/i, "husband"],
-  [/user'?s?\s+partner\s+is\s+([^\s.,]+)/i, "partner"],
-  [/user'?s?\s+son\s+is\s+([^\s.,]+)/i, "son"],
-  [/user'?s?\s+daughter\s+is\s+([^\s.,]+)/i, "daughter"],
-  [/user'?s?\s+mother\s+is\s+([^\s.,]+)/i, "mother"],
-  [/user'?s?\s+father\s+is\s+([^\s.,]+)/i, "father"],
-  [/user'?s?\s+brother\s+is\s+([^\s.,]+)/i, "brother"],
-  [/user'?s?\s+sister\s+is\s+([^\s.,]+)/i, "sister"],
-  [/user'?s?\s+grandfather\s+is\s+([^\s.,]+)/i, "grandfather"],
-  [/user'?s?\s+grandmother\s+is\s+([^\s.,]+)/i, "grandmother"],
-  [/user'?s?\s+dog\s+is\s+([^\s.,]+)/i, "dog"],
-  [/user'?s?\s+cat\s+is\s+([^\s.,]+)/i, "cat"],
-  [/user\s+lives\s+in\s+([^.,]+)/i, "lives in"],
-  [/user\s+was\s+born\s+in\s+([^.,]+)/i, "born in"],
-  [/user'?s?\s+name\s+is\s+([^\s.,]+)/i, "name"],
-  [/user'?s?\s+birthday\s+is\s+([^.,]+)/i, "birthday"],
+// ─── Family entity extraction ────────────────────────────────────────────────
+// Structured family facts. One entry per role (spouse, child, pet…).
+// Deduplication: if we see the same role again with the same name, we skip.
+// "is named X" is handled by the (?:named\s+)? group in every pattern.
+
+type FamilyEntity = {
+  role: string;
+  name: string;
+  isPet: boolean;
+};
+
+// Each tuple: [regex capturing name after "is [named] X", role label, isPet]
+// The capture group [^\s.,]+ takes the FIRST word after "is [named]".
+// Roles that can appear multiple times (son, daughter, cat…) are additive;
+// spouse/partner roles are kept as single canonical entries.
+const FAMILY_ROLE_MATCHERS: [RegExp, string, boolean][] = [
+  [/user'?s?\s+name\s+is\s+(?:named\s+)?([^\s.,]+)/i,         "name",        false],
+  [/user'?s?\s+wife\s+is\s+(?:named\s+)?([^\s.,]+)/i,         "wife",        false],
+  [/user'?s?\s+husband\s+is\s+(?:named\s+)?([^\s.,]+)/i,      "husband",     false],
+  [/user'?s?\s+partner\s+is\s+(?:named\s+)?([^\s.,]+)/i,      "partner",     false],
+  [/user'?s?\s+son\s+is\s+(?:named\s+)?([^\s.,]+)/i,          "son",         false],
+  [/user'?s?\s+daughter\s+is\s+(?:named\s+)?([^\s.,]+)/i,     "daughter",    false],
+  [/user'?s?\s+mother\s+is\s+(?:named\s+)?([^\s.,]+)/i,       "mother",      false],
+  [/user'?s?\s+father\s+is\s+(?:named\s+)?([^\s.,]+)/i,       "father",      false],
+  [/user'?s?\s+brother\s+is\s+(?:named\s+)?([^\s.,]+)/i,      "brother",     false],
+  [/user'?s?\s+sister\s+is\s+(?:named\s+)?([^\s.,]+)/i,       "sister",      false],
+  [/user'?s?\s+grandfather\s+is\s+(?:named\s+)?([^\s.,]+)/i,  "grandfather", false],
+  [/user'?s?\s+grandmother\s+is\s+(?:named\s+)?([^\s.,]+)/i,  "grandmother", false],
+  [/user'?s?\s+dog\s+is\s+(?:named\s+)?([^\s.,]+)/i,          "dog",         true],
+  [/user'?s?\s+cat\s+is\s+(?:named\s+)?([^\s.,]+)/i,          "cat",         true],
+  [/user'?s?\s+rabbit\s+is\s+(?:named\s+)?([^\s.,]+)/i,       "rabbit",      true],
+  [/user'?s?\s+bird\s+is\s+(?:named\s+)?([^\s.,]+)/i,         "bird",        true],
 ];
 
-function extractFamilyLabel(raw: string): string | null {
-  for (const [re, role] of FAMILY_ROLE_PATTERNS) {
-    const m = raw.match(re);
-    if (m?.[1]) {
-      const value = m[1].replace(/[.,!?]+$/, "").trim();
-      return `${role}: ${value}`;
+// Roles that should only appear once (first-wins deduplication).
+const SINGLETON_ROLES = new Set(["name", "wife", "husband", "partner", "mother", "father"]);
+
+// Numeric pet count patterns: "User has 3 cats."
+const PET_COUNT_RE = /user\s+has\s+(\d+)\s+(cat|cats|dog|dogs|rabbit|rabbits|bird|birds)/i;
+
+// Location / birthday patterns kept separately (not "entities").
+const LOCATION_RE = /user\s+(?:lives|is\s+living)\s+in\s+([^.,]+)/i;
+const BORN_RE     = /user\s+was\s+born\s+in\s+([^.,]+)/i;
+const BIRTHDAY_RE = /user'?s?\s+birthday\s+is\s+([^.,]+)/i;
+
+type FamilyFacts = {
+  entities: FamilyEntity[];
+  petCounts: Record<string, number>; // e.g. { cat: 3 }
+  location: string | null;
+  birthday: string | null;
+};
+
+function extractFamilyFacts(memories: MemoryInputV2[]): FamilyFacts {
+  const entities: FamilyEntity[] = [];
+  const seen = new Map<string, Set<string>>(); // role → set of names seen
+  const petCounts: Record<string, number> = {};
+  let location: string | null = null;
+  let birthday: string | null = null;
+
+  for (const memory of memories) {
+    const raw = memoryText(memory);
+    if (!raw.trim()) continue;
+
+    // Entity patterns
+    for (const [re, role, isPet] of FAMILY_ROLE_MATCHERS) {
+      const m = raw.match(re);
+      if (!m?.[1]) continue;
+      const name = m[1].replace(/[.,!?]+$/, "").trim();
+      // Guard against junk captures (single chars, stopwords)
+      if (name.length < 2 || /^(a|an|the|is|are|my|his|her)$/i.test(name)) continue;
+
+      if (!seen.has(role)) seen.set(role, new Set());
+      const seenNames = seen.get(role)!;
+
+      if (SINGLETON_ROLES.has(role) && seenNames.size > 0) continue; // keep first only
+      if (seenNames.has(name.toLowerCase())) continue;                // deduplicate same name
+
+      seenNames.add(name.toLowerCase());
+      entities.push({ role, name, isPet });
+    }
+
+    // Numeric pet counts
+    const pc = raw.match(PET_COUNT_RE);
+    if (pc) {
+      const count = parseInt(pc[1], 10);
+      const pet = pc[2].replace(/s$/, ""); // "cats" → "cat"
+      petCounts[pet] = Math.max(petCounts[pet] ?? 0, count);
+    }
+
+    // Location
+    if (!location) {
+      const loc = raw.match(LOCATION_RE) ?? raw.match(BORN_RE);
+      if (loc?.[1]) location = loc[1].replace(/[.,!?]+$/, "").trim();
+    }
+
+    // Birthday
+    if (!birthday) {
+      const bd = raw.match(BIRTHDAY_RE);
+      if (bd?.[1]) birthday = bd[1].replace(/[.,!?]+$/, "").trim();
     }
   }
-  // Short raw values (e.g. a name) can pass through as-is.
-  const trimmed = raw.replace(/\.$/, "").trim();
-  return trimmed.length <= 60 ? trimmed : null;
+
+  return { entities, petCounts, location, birthday };
 }
 
-// Returns a clean goal phrase only when a trigger snippet can be extracted.
-// Falls back to null so the caller can skip the bucket hit for junk.
+// Generate a list of human-readable sentences from FamilyFacts.
+function buildFamilySummary(facts: FamilyFacts, familyHits: number): string {
+  const sentences: string[] = [];
+
+  // Name
+  const nameEntity = facts.entities.find((e) => e.role === "name");
+  if (nameEntity) sentences.push(`Your name is ${nameEntity.name}.`);
+
+  // Spouse
+  for (const role of ["wife", "husband", "partner"]) {
+    const e = facts.entities.find((e) => e.role === role);
+    if (e) {
+      sentences.push(`You are married to ${e.name}.`);
+      break;
+    }
+  }
+
+  // Children
+  const children = facts.entities.filter((e) => e.role === "son" || e.role === "daughter");
+  for (const child of children) {
+    sentences.push(`You have a ${child.role} named ${child.name}.`);
+  }
+
+  // Parents / siblings
+  for (const role of ["mother", "father", "brother", "sister", "grandfather", "grandmother"]) {
+    const matches = facts.entities.filter((e) => e.role === role);
+    for (const e of matches) {
+      sentences.push(`Your ${role} is ${e.name}.`);
+    }
+  }
+
+  // Pets (named)
+  const namedPets = facts.entities.filter((e) => e.isPet);
+  const petCountsCopy: Record<string, number> = { ...facts.petCounts };
+
+  for (const pet of namedPets) {
+    const type = pet.role;
+    if (!petCountsCopy[type] || petCountsCopy[type] === 1) {
+      sentences.push(`You have a ${type} named ${pet.name}.`);
+    } else {
+      sentences.push(`You have a ${type} named ${pet.name} (among others).`);
+    }
+    delete petCountsCopy[type]; // handled
+  }
+
+  // Unnamed numeric pet counts
+  for (const [type, count] of Object.entries(petCountsCopy)) {
+    if (count > 0) {
+      sentences.push(`You have ${count} ${count === 1 ? type : type + "s"}.`);
+    }
+  }
+
+  // Location / birthday
+  if (facts.location) sentences.push(`You live in ${facts.location}.`);
+  if (facts.birthday) sentences.push(`Your birthday is ${facts.birthday}.`);
+
+  // Family priority note — only when family memory is prominent
+  if (familyHits >= 3 && (children.length > 0 || facts.entities.some((e) => e.role === "wife" || e.role === "husband" || e.role === "partner"))) {
+    sentences.push("Family appears to be one of your strongest priorities.");
+  }
+
+  return sentences.join(" ");
+}
+
+// ─── Project extraction ───────────────────────────────────────────────────────
+
+const PROJECT_EXTRACT_TRIGGERS = [
+  "building", "working on", "i built", "launched", "running", "managing",
+  "created", "co-founded", "founded", "started",
+  "buduję", "pracuję nad", "tworzę", "założyłem", "założylem",
+];
+
+function captureProjectName(raw: string): string | null {
+  const lower = raw.toLowerCase();
+  for (const trigger of PROJECT_EXTRACT_TRIGGERS) {
+    const idx = lower.indexOf(trigger);
+    if (idx === -1) continue;
+    const after = raw.slice(idx + trigger.length).trimStart();
+    // Skip filler words
+    const cleaned = after.replace(/^(a|an|the|my|our)\s+/i, "");
+    const snippet = cleaned.split(/[.,;!?\n]/)[0].trim();
+    if (snippet.length >= 2 && snippet.length <= 60) return snippet;
+  }
+  return null;
+}
+
+// ─── Goal phrase extraction ───────────────────────────────────────────────────
+
 function captureGoalPhrase(raw: string): string | null {
   const lower = raw.toLowerCase();
   for (const trigger of GOAL_TRIGGERS) {
@@ -594,17 +759,23 @@ function detectProfileSummaryQuestion(message: string): boolean {
 export const isProfileSummaryQuestion = detectProfileSummaryQuestion;
 
 export function buildUserProfileV2(memories: MemoryInputV2[]): UserProfileV2 {
-  const family: ProfileBucket = {};
+  const safeMemories = Array.isArray(memories) ? memories : [];
+
   const goals: ProfileBucket = {};
+  const projects: ProfileBucket = {};
   const values: ProfileBucket = {};
   const personality: ProfileBucket = {};
   const communicationStyle: ProfileBucket = {};
   const currentLifeThemes: ProfileBucket = {};
   const patterns: ProfileBucket = {};
 
+  // Family memories collected first for structured extraction.
+  const familyMemories: MemoryInputV2[] = [];
+  let familyHits = 0;
+
   let evidenceCount = 0;
 
-  for (const memory of memories ?? []) {
+  for (const memory of safeMemories) {
     const raw = memoryText(memory);
     if (!raw.trim()) continue;
 
@@ -614,19 +785,29 @@ export function buildUserProfileV2(memories: MemoryInputV2[]): UserProfileV2 {
     const type = (memory.type ?? "").toLowerCase();
     const weight = Math.max(1, Math.min(4, memory.repeat_count ?? 1));
 
-    if (category === "family" || category === "pet" || category === "home" || category === "birth" || hasAny(lower, FAMILY_KEYWORDS)) {
-      const label = extractFamilyLabel(raw);
-      if (label) addProfileHit(family, label, raw, weight);
+    // Family bucket — collect for structured extraction
+    const isFamilyCat = category === "family" || category === "pet" || category === "home" || category === "birth" || category === "identity";
+    if (isFamilyCat || hasAny(lower, FAMILY_KEYWORDS)) {
+      familyMemories.push(memory);
+      familyHits += weight;
     }
 
-    if (
-      category === "goal" ||
-      category === "project" ||
-      type === "goal" ||
-      hasAny(lower, GOAL_KEYWORDS)
-    ) {
+    // Goals — trigger-phrase extraction; also pull explicit goal/project categories
+    if (category === "goal" || type === "goal") {
+      const phrase = captureGoalPhrase(raw) ?? (raw.length <= 100 ? normalizeLabel(raw) : null);
+      if (phrase) addProfileHit(goals, phrase, raw, weight);
+    } else if (hasAny(lower, GOAL_KEYWORDS)) {
       const phrase = captureGoalPhrase(raw);
       if (phrase) addProfileHit(goals, phrase, raw, weight);
+    }
+
+    // Projects — explicit category first, then trigger-phrase extraction
+    if (category === "project" || type === "project") {
+      const name = captureProjectName(raw) ?? (raw.replace(/^user[''s\s]+/i, "").length <= 60 ? normalizeLabel(raw.replace(/^user[''s\s]+/i, "")) : null);
+      if (name) addProfileHit(projects, name, raw, weight);
+    } else {
+      const name = captureProjectName(raw);
+      if (name) addProfileHit(projects, name, raw, weight);
     }
 
     for (const [label, keywords] of Object.entries(VALUE_KEYWORDS)) {
@@ -663,9 +844,25 @@ export function buildUserProfileV2(memories: MemoryInputV2[]): UserProfileV2 {
     }
   }
 
+  // Build structured family facts and summary from all family memories.
+  const familyFacts = extractFamilyFacts(familyMemories);
+  const familySummary = buildFamilySummary(familyFacts, familyHits);
+
+  // Expose family entities as ProfileV2Items for API consumers.
+  const familyItems: ProfileV2Item[] = familyFacts.entities
+    .filter((e) => e.role !== "name")
+    .map((e) => ({
+      label: `${e.role}: ${e.name}`,
+      count: 1,
+      confidence: 80,
+      evidence: [],
+    }));
+
   return {
-    family: itemize(family, 8),
+    familySummary,
+    family: familyItems,
     goals: itemize(goals, 8),
+    projects: itemize(projects, 8),
     values: itemize(values, 6),
     personality: itemize(personality, 6),
     communicationStyle: itemize(communicationStyle, 4),
@@ -713,10 +910,15 @@ export function formatProfileForInnerReply(profile: UserProfileV2): string {
 
   const lines: string[] = [];
 
-  // Family / personal facts
-  if (profile.family.length > 0) {
-    const items = profile.family.map((i) => i.label);
-    lines.push(`Family & personal: ${items.join(", ")}.`);
+  // Family — use generated summary paragraph
+  if (profile.familySummary) {
+    lines.push(profile.familySummary);
+  }
+
+  // Projects
+  if (profile.projects.length > 0) {
+    const names = profile.projects.map((i) => i.label);
+    lines.push(`Projects: ${names.join(", ")}.`);
   }
 
   // Goals
@@ -725,7 +927,7 @@ export function formatProfileForInnerReply(profile: UserProfileV2): string {
     lines.push(`Goals: ${items.join("; ")}.`);
   }
 
-  // Values — deduplicated keywords, natural list
+  // Values
   if (profile.values.length > 0) {
     const items = profile.values.map((i) => i.label);
     lines.push(`Values: ${joinList(items)}.`);
@@ -737,7 +939,7 @@ export function formatProfileForInnerReply(profile: UserProfileV2): string {
     lines.push(`Personality: ${joinList(items)}.`);
   }
 
-  // Communication style — one sentence
+  // Communication style — single sentence
   if (profile.communicationStyle.length > 0) {
     const top = profile.communicationStyle[0].label;
     const sentence = COMM_STYLE_SENTENCES[top];
@@ -750,7 +952,7 @@ export function formatProfileForInnerReply(profile: UserProfileV2): string {
     lines.push(`What's on your plate: ${joinList(items)}.`);
   }
 
-  // Patterns — converted to natural phrases
+  // Patterns — natural language phrases
   if (profile.patterns.length > 0) {
     const phrases = profile.patterns
       .map((i) => PATTERN_SENTENCES[i.label] ?? i.label)
