@@ -408,3 +408,361 @@ export function prettyStyleLabel(value: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
+
+// ---------------------------------------------------------------------------
+// User Profile Engine v2
+// ---------------------------------------------------------------------------
+// Complete profile builder from stored memories. Deterministic only: category,
+// type and keyword mapping. No AI calls, embeddings, or model classification.
+
+export type ProfileV2Section =
+  | "family"
+  | "goals"
+  | "values"
+  | "personality"
+  | "communicationStyle"
+  | "currentLifeThemes"
+  | "patterns";
+
+export type ProfileV2Item = {
+  label: string;
+  confidence: number;
+  count: number;
+  evidence: string[];
+};
+
+export type UserProfileV2 = {
+  family: ProfileV2Item[];
+  goals: ProfileV2Item[];
+  values: ProfileV2Item[];
+  personality: ProfileV2Item[];
+  communicationStyle: ProfileV2Item[];
+  currentLifeThemes: ProfileV2Item[];
+  patterns: ProfileV2Item[];
+  evidenceCount: number;
+  generatedAt: string;
+};
+
+type MemoryInputV2 = MemoryInput & {
+  category?: string;
+  type?: string;
+  repeat_count?: number;
+  importance?: number;
+  emotional_weight?: number;
+  created_at?: string;
+  last_accessed?: string;
+};
+
+type ProfileBucket = Record<string, { count: number; evidence: string[] }>;
+
+const FAMILY_KEYWORDS = [
+  "family", "wife", "husband", "partner", "son", "daughter", "child",
+  "children", "mother", "father", "mom", "dad", "brother", "sister",
+  "rodzina", "żona", "zona", "mąż", "maz", "syn", "córka", "corka",
+  "dziecko", "dzieci", "mama", "tata", "brat", "siostra",
+];
+
+const GOAL_KEYWORDS = [
+  "goal", "want to", "trying to", "working on", "building", "build",
+  "plan", "planning", "dream", "aim", "launch", "grow", "improve",
+  "chcę", "chce", "planuję", "planuje", "buduję", "buduje", "cel",
+];
+
+const CURRENT_THEME_KEYWORDS: Record<string, string[]> = {
+  work: ["work", "job", "business", "company", "clinic", "client", "startup", "firma", "praca"],
+  building: ["build", "building", "project", "app", "inner", "product", "launch", "projekt"],
+  pressure: ["pressure", "overwhelmed", "stress", "stressed", "too much", "presja", "stres"],
+  family: FAMILY_KEYWORDS,
+  health: ["health", "tired", "sleep", "energy", "exhausted", "zdrowie", "zmęcz", "sen"],
+  identity: ["identity", "who i am", "becoming", "myself", "tożsamość", "sobą"],
+  relationships: ["relationship", "connection", "trust", "closeness", "friend", "relacja", "bliskość"],
+};
+
+const RELATIONSHIP_PATTERN_LABELS: Record<string, string> = {
+  loneliness: "loneliness",
+  pressure: "pressure",
+  avoidance: "avoidance",
+  overthinking: "overthinking",
+  emotional_shutdown: "emotional shutdown",
+  identity_confusion: "identity confusion",
+  fear_of_rejection: "fear of rejection",
+  trust_issue: "trust taking time",
+  conflict_sensitivity: "conflict sensitivity",
+  emotional_withdrawal: "emotional withdrawal",
+  need_for_reassurance: "need for reassurance",
+};
+
+function normalizeLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").replace(/\.$/, "");
+}
+
+function addProfileHit(
+  bucket: ProfileBucket,
+  label: string,
+  evidence: string,
+  weight = 1
+) {
+  const cleanLabel = normalizeLabel(label);
+  if (!cleanLabel) return;
+  const entry = bucket[cleanLabel] ?? { count: 0, evidence: [] };
+  entry.count += weight;
+  if (entry.evidence.length < 3 && evidence.trim()) {
+    entry.evidence.push(evidence.trim());
+  }
+  bucket[cleanLabel] = entry;
+}
+
+function hasAny(lower: string, keywords: string[]): boolean {
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+function itemize(bucket: ProfileBucket, limit: number): ProfileV2Item[] {
+  return Object.entries(bucket)
+    .map(([label, entry]) => ({
+      label,
+      count: entry.count,
+      confidence: Math.round(clamp(35 + (entry.count - 1) * 15)),
+      evidence: entry.evidence,
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, limit);
+}
+
+// Extract a clean human-readable label from a family memory string.
+// "User's wife is Ania." → "wife: Ania"
+// Returns null when the raw string is too long / unrecognisable.
+const FAMILY_ROLE_PATTERNS: [RegExp, string][] = [
+  [/user'?s?\s+wife\s+is\s+([^\s.,]+)/i, "wife"],
+  [/user'?s?\s+husband\s+is\s+([^\s.,]+)/i, "husband"],
+  [/user'?s?\s+partner\s+is\s+([^\s.,]+)/i, "partner"],
+  [/user'?s?\s+son\s+is\s+([^\s.,]+)/i, "son"],
+  [/user'?s?\s+daughter\s+is\s+([^\s.,]+)/i, "daughter"],
+  [/user'?s?\s+mother\s+is\s+([^\s.,]+)/i, "mother"],
+  [/user'?s?\s+father\s+is\s+([^\s.,]+)/i, "father"],
+  [/user'?s?\s+brother\s+is\s+([^\s.,]+)/i, "brother"],
+  [/user'?s?\s+sister\s+is\s+([^\s.,]+)/i, "sister"],
+  [/user'?s?\s+grandfather\s+is\s+([^\s.,]+)/i, "grandfather"],
+  [/user'?s?\s+grandmother\s+is\s+([^\s.,]+)/i, "grandmother"],
+  [/user'?s?\s+dog\s+is\s+([^\s.,]+)/i, "dog"],
+  [/user'?s?\s+cat\s+is\s+([^\s.,]+)/i, "cat"],
+  [/user\s+lives\s+in\s+([^.,]+)/i, "lives in"],
+  [/user\s+was\s+born\s+in\s+([^.,]+)/i, "born in"],
+  [/user'?s?\s+name\s+is\s+([^\s.,]+)/i, "name"],
+  [/user'?s?\s+birthday\s+is\s+([^.,]+)/i, "birthday"],
+];
+
+function extractFamilyLabel(raw: string): string | null {
+  for (const [re, role] of FAMILY_ROLE_PATTERNS) {
+    const m = raw.match(re);
+    if (m?.[1]) {
+      const value = m[1].replace(/[.,!?]+$/, "").trim();
+      return `${role}: ${value}`;
+    }
+  }
+  // Short raw values (e.g. a name) can pass through as-is.
+  const trimmed = raw.replace(/\.$/, "").trim();
+  return trimmed.length <= 60 ? trimmed : null;
+}
+
+// Returns a clean goal phrase only when a trigger snippet can be extracted.
+// Falls back to null so the caller can skip the bucket hit for junk.
+function captureGoalPhrase(raw: string): string | null {
+  const lower = raw.toLowerCase();
+  for (const trigger of GOAL_TRIGGERS) {
+    const idx = lower.indexOf(trigger);
+    if (idx === -1) continue;
+    const after = raw.slice(idx + trigger.length);
+    const snippet = after.split(/[.,;!?\n]/)[0].trim();
+    if (snippet.length >= 3 && snippet.length <= 80) return snippet;
+  }
+  return null;
+}
+
+function detectProfileSummaryQuestion(message: string): boolean {
+  const lower = (message || "").toLowerCase();
+  return (
+    lower.includes("what do you know about me") ||
+    lower.includes("tell me everything you know about me") ||
+    lower.includes("what do you remember about me") ||
+    lower.includes("what have you learned about me") ||
+    lower.includes("co o mnie wiesz") ||
+    lower.includes("co pamiętasz o mnie") ||
+    lower.includes("co pamietasz o mnie")
+  );
+}
+
+export const isProfileSummaryQuestion = detectProfileSummaryQuestion;
+
+export function buildUserProfileV2(memories: MemoryInputV2[]): UserProfileV2 {
+  const family: ProfileBucket = {};
+  const goals: ProfileBucket = {};
+  const values: ProfileBucket = {};
+  const personality: ProfileBucket = {};
+  const communicationStyle: ProfileBucket = {};
+  const currentLifeThemes: ProfileBucket = {};
+  const patterns: ProfileBucket = {};
+
+  let evidenceCount = 0;
+
+  for (const memory of memories ?? []) {
+    const raw = memoryText(memory);
+    if (!raw.trim()) continue;
+
+    evidenceCount += 1;
+    const lower = raw.toLowerCase();
+    const category = (memory.category ?? "").toLowerCase();
+    const type = (memory.type ?? "").toLowerCase();
+    const weight = Math.max(1, Math.min(4, memory.repeat_count ?? 1));
+
+    if (category === "family" || category === "pet" || category === "home" || category === "birth" || hasAny(lower, FAMILY_KEYWORDS)) {
+      const label = extractFamilyLabel(raw);
+      if (label) addProfileHit(family, label, raw, weight);
+    }
+
+    if (
+      category === "goal" ||
+      category === "project" ||
+      type === "goal" ||
+      hasAny(lower, GOAL_KEYWORDS)
+    ) {
+      const phrase = captureGoalPhrase(raw);
+      if (phrase) addProfileHit(goals, phrase, raw, weight);
+    }
+
+    for (const [label, keywords] of Object.entries(VALUE_KEYWORDS)) {
+      if (category === "values" || hasAny(lower, keywords)) {
+        addProfileHit(values, label, raw, weight);
+      }
+    }
+
+    for (const [label, keywords] of Object.entries(TRAIT_KEYWORDS)) {
+      if (hasAny(lower, keywords)) {
+        addProfileHit(personality, label, raw, weight);
+      }
+    }
+
+    for (const [label, keywords] of Object.entries(COMMUNICATION_KEYWORDS)) {
+      if (hasAny(lower, keywords)) {
+        addProfileHit(communicationStyle, label, raw, weight);
+      }
+    }
+
+    for (const [label, keywords] of Object.entries(CURRENT_THEME_KEYWORDS)) {
+      if (category === label || hasAny(lower, keywords)) {
+        addProfileHit(currentLifeThemes, label, raw, weight);
+      }
+    }
+
+    if (type === "relationship_pattern") {
+      addProfileHit(patterns, RELATIONSHIP_PATTERN_LABELS[lower] ?? raw, raw, weight);
+    }
+    for (const [label, keywords] of Object.entries(RELATIONSHIP_KEYWORDS)) {
+      if (hasAny(lower, keywords)) {
+        addProfileHit(patterns, label, raw, weight);
+      }
+    }
+  }
+
+  return {
+    family: itemize(family, 8),
+    goals: itemize(goals, 8),
+    values: itemize(values, 6),
+    personality: itemize(personality, 6),
+    communicationStyle: itemize(communicationStyle, 4),
+    currentLifeThemes: itemize(currentLifeThemes, 8),
+    patterns: itemize(patterns, 8),
+    evidenceCount,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+const COMM_STYLE_SENTENCES: Record<string, string> = {
+  direct: "You communicate directly and to the point.",
+  reflective: "You tend to think things through before speaking.",
+  analytical: "You lean toward logic and reasoning when you talk.",
+  emotional: "You speak from how you feel.",
+};
+
+const PATTERN_SENTENCES: Record<string, string> = {
+  avoidance: "you sometimes pull back from people",
+  loneliness: "there is a quiet loneliness underneath at times",
+  pressure: "pressure tends to sit heavy on you",
+  "fear of rejection": "part of you braces for being pushed away",
+  "trust taking time": "trust takes longer for you than it looks",
+  "conflict sensitivity": "conflict lands louder for you than it is",
+  "emotional withdrawal": "when feelings rise, you tend to go inward",
+  "need for reassurance": "you need small signs that things are okay",
+  "emotional shutdown": "you can shut down emotionally when it gets too much",
+  "identity confusion": "there are moments where you feel unsure of who you are becoming",
+  overthinking: "you can get stuck inside your own head",
+  seeking_connection: "you seem to want closeness and connection",
+  avoidant: "you value your space when things get heavy",
+  secure: "you seem comfortable being open with people you trust",
+};
+
+function joinList(items: string[]): string {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+export function formatProfileForInnerReply(profile: UserProfileV2): string {
+  if (profile.evidenceCount === 0) {
+    return "I do not know much about you yet. Talk to me and I'll learn.";
+  }
+
+  const lines: string[] = [];
+
+  // Family / personal facts
+  if (profile.family.length > 0) {
+    const items = profile.family.map((i) => i.label);
+    lines.push(`Family & personal: ${items.join(", ")}.`);
+  }
+
+  // Goals
+  if (profile.goals.length > 0) {
+    const items = profile.goals.map((i) => i.label);
+    lines.push(`Goals: ${items.join("; ")}.`);
+  }
+
+  // Values — deduplicated keywords, natural list
+  if (profile.values.length > 0) {
+    const items = profile.values.map((i) => i.label);
+    lines.push(`Values: ${joinList(items)}.`);
+  }
+
+  // Personality traits
+  if (profile.personality.length > 0) {
+    const items = profile.personality.map((i) => i.label);
+    lines.push(`Personality: ${joinList(items)}.`);
+  }
+
+  // Communication style — one sentence
+  if (profile.communicationStyle.length > 0) {
+    const top = profile.communicationStyle[0].label;
+    const sentence = COMM_STYLE_SENTENCES[top];
+    if (sentence) lines.push(sentence);
+  }
+
+  // Current life themes
+  if (profile.currentLifeThemes.length > 0) {
+    const items = profile.currentLifeThemes.map((i) => i.label);
+    lines.push(`What's on your plate: ${joinList(items)}.`);
+  }
+
+  // Patterns — converted to natural phrases
+  if (profile.patterns.length > 0) {
+    const phrases = profile.patterns
+      .map((i) => PATTERN_SENTENCES[i.label] ?? i.label)
+      .filter(Boolean);
+    if (phrases.length > 0) {
+      lines.push(`Patterns I've noticed: ${joinList(phrases)}.`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return "I have memories about you, but not enough to build a clear picture yet.";
+  }
+
+  return `Here is what I know about you:\n\n${lines.join("\n")}`;
+}

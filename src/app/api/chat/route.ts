@@ -112,6 +112,11 @@ import {
   classifyMemoryType,
   getRelevantMemories,
 } from "@/lib/memoryOptimizer";
+import {
+  buildUserProfileV2,
+  formatProfileForInnerReply,
+  isProfileSummaryQuestion,
+} from "@/lib/userProfileEngine";
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
@@ -778,6 +783,19 @@ if (localFactResponse) {
     reply: localFactResponse,
     state: innerState || "present",
     memoryCandidate: null,
+  });
+}
+
+if (isProfileSummaryQuestion(userMessage)) {
+  const profile = buildUserProfileV2(allMemories);
+  const reply = formatProfileForInnerReply(profile);
+
+  return NextResponse.json({
+    response: reply,
+    reply,
+    state: innerState || "present",
+    memoryCandidate: null,
+    profile,
   });
 }
 
